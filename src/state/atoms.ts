@@ -1,6 +1,9 @@
 import { atom } from "jotai";
-import type { Email, LabelId, FolderLabel } from "../domain/email.ts";
-import { mockEmails } from "../mock/emails.ts";
+import { groupIntoThreads, type Email, type LabelId, type FolderLabel } from "../domain/email.ts";
+import { parseSearchQuery, matchesSearch } from "../utils/searchParser.ts";
+import { type EpistConfig, type AccountConfig, getDefaultConfig } from "../utils/config.ts";
+
+import type { AccountInfo } from "../auth/tokens.ts";
 
 // ===== Focus Context =====
 export type FocusContext =
@@ -13,7 +16,7 @@ export type FocusContext =
   | "reply";    // Reply to email
 
 // ===== Overlay Types =====
-export type OverlayKind = "help" | "compose" | "confirm";
+export type OverlayKind = "help" | "compose" | "confirm" | "moveToFolder" | "accounts";
 
 export interface Overlay {
   kind: OverlayKind;
@@ -33,13 +36,81 @@ export interface Message {
 // ===== Core Atoms =====
 
 // All emails
-export const emailsAtom = atom<Email[]>(mockEmails);
+export const emailsAtom = atom<Email[]>([]);
+
+// Application configuration (loaded from ~/.config/epist/config.toml)
+export const configAtom = atom<EpistConfig>(getDefaultConfig());
+
+// ===== Multi-Account =====
+
+// All accounts — prefers Google accounts when logged in, falls back to config
+export const accountsAtom = atom<AccountConfig[]>((get) => {
+  const googleAccounts = get(googleAccountsAtom);
+  if (googleAccounts.length > 0) {
+    // Build AccountConfig from Google accounts
+    return googleAccounts.map((ga, i) => ({
+      name: ga.name || ga.email.split("@")[0] || "Account",
+      email: ga.email,
+      provider: "gmail" as const,
+      is_default: i === 0,
+    }));
+  }
+  // Fallback to config accounts
+  const config = get(configAtom);
+  return config.accounts;
+});
+
+// Active account index for the global app context
+export const activeAccountIndexAtom = atom<number>(0);
+
+// Active account (derived)
+export const activeAccountAtom = atom<AccountConfig | null>((get) => {
+  const accounts = get(accountsAtom);
+  const index = get(activeAccountIndexAtom);
+  return accounts[index] ?? accounts[0] ?? null;
+});
+
+// Account selected for the current reply/compose (can differ from active)
+export const replyFromAccountIndexAtom = atom<number>(0);
+
+// Derived: reply "from" account
+export const replyFromAccountAtom = atom<AccountConfig | null>((get) => {
+  const accounts = get(accountsAtom);
+  const index = get(replyFromAccountIndexAtom);
+  return accounts[index] ?? accounts[0] ?? null;
+});
+
+// ===== Auth State =====
+
+// Whether user is logged in to Google
+export const isLoggedInAtom = atom<boolean>(false);
+
+// Whether an auth operation is in progress
+export const isAuthLoadingAtom = atom<boolean>(false);
+
+// Connected Google accounts (from OAuth tokens, not config)
+export const googleAccountsAtom = atom<AccountInfo[]>([]);
+
+// ===== Sync State =====
+
+// Gmail label counts from the server (fetched via API, not derived from local emails)
+export const gmailLabelCountsAtom = atom<Record<string, { total: number; unread: number }>>({});
+
+// Whether more emails can be loaded (pagination)
+export const hasMoreEmailsAtom = atom<boolean>(false);
+
+// Whether a sync operation is currently in progress
+export const isSyncingAtom = atom<boolean>(false);
 
 // Current label/folder view
 export const currentLabelAtom = atom<FolderLabel>("INBOX");
 
+// Account filter for inbox (null = all accounts / combined inbox)
+export const accountFilterAtom = atom<string | null>(null);
+
 // Currently selected email ID
-export const selectedEmailIdAtom = atom<string | null>(mockEmails[0]?.id ?? null);
+// Keep for backward compat — actions use this for individual email operations
+export const selectedEmailIdAtom = atom<string | null>(null);
 
 // Current focus context
 export const focusAtom = atom<FocusContext>("list");
@@ -62,6 +133,15 @@ export const commandInputAtom = atom<string>("");
 // Command palette selection index
 export const commandSelectedIndexAtom = atom<number>(0);
 
+// Undo stack — stores previous email states for reversible actions
+export interface UndoEntry {
+  description: string;
+  emails: Email[];
+  selectedThreadId: string | null;
+  timestamp: number;
+}
+export const undoStackAtom = atom<UndoEntry[]>([]);
+
 // Status message (vim-style)
 export const messageAtom = atom<Message | null>(null);
 
@@ -74,8 +154,17 @@ export const listScrollOffsetAtom = atom<number>(0);
 // Scroll offset for email view (ScrollView clamps internally)
 export const viewScrollOffsetAtom = atom<number>(0);
 
-// Header visibility in email view (collapsed by default)
-export const headersExpandedAtom = atom<boolean>(false);
+// Header visibility in email view — tracks which message IDs have expanded headers
+export const expandedHeadersAtom = atom<Record<string, boolean>>({});
+// Debug: show raw HTML for a specific message (toggled per-message)
+export const debugHtmlAtom = atom<Record<string, boolean>>({});
+// Backward compat alias — true if ANY header is expanded
+export const headersExpandedAtom = atom(
+  (get) => Object.keys(get(expandedHeadersAtom)).length > 0
+);
+
+// Focused message index within a conversation thread (-1 = latest)
+export const focusedMessageIndexAtom = atom<number>(-1);
 
 // Attachment viewer state
 export const selectedAttachmentIndexAtom = atom<number>(-1); // -1 means no attachment selected
@@ -88,8 +177,8 @@ export const downloadsPathAtom = atom<string>(
 
 // ===== Reply State =====
 
-// Reply mode: null = not replying, 'reply' = reply to sender, 'replyAll' = reply to all
-export type ReplyMode = null | "reply" | "replyAll";
+// Reply mode: null = not replying, 'reply' = reply to sender, 'replyAll' = reply to all, 'compose' = new email, 'forward' = forward
+export type ReplyMode = null | "reply" | "replyAll" | "compose" | "forward";
 export const replyModeAtom = atom<ReplyMode>(null);
 
 // Reply fields
@@ -98,6 +187,45 @@ export const replyCcAtom = atom<string>("");
 export const replyBccAtom = atom<string>("");
 export const replySubjectAtom = atom<string>("");
 export const replyContentAtom = atom<string>("");
+export const draftIdAtom = atom<string | null>(null);
+
+// Email signature
+export const signatureAtom = atom<string>("\n--\nSent from Epist");
+
+// Quick inline reply (in email view, without full compose modal)
+export const inlineReplyOpenAtom = atom<boolean>(false);
+export const inlineReplyContentAtom = atom<string>("");
+
+// Contacts derived from all emails (from + to addresses)
+export const contactsAtom = atom((get) => {
+  const emails = get(emailsAtom);
+  const accounts = get(accountsAtom);
+  const ownEmails = new Set(accounts.map(a => a.email.toLowerCase()));
+  const seen = new Map<string, { email: string; name?: string; count: number }>();
+  
+  for (const e of emails) {
+    const addrs = [e.from, ...e.to, ...(e.cc || []), ...(e.bcc || [])];
+    for (const addr of addrs) {
+      if (ownEmails.has(addr.email.toLowerCase())) continue; // skip own accounts
+      const key = addr.email.toLowerCase();
+      const existing = seen.get(key);
+      if (existing) {
+        existing.count++;
+        if (addr.name && !existing.name) existing.name = addr.name;
+      } else {
+        seen.set(key, { email: addr.email, name: addr.name, count: 1 });
+      }
+    }
+  }
+  
+  return Array.from(seen.values()).sort((a, b) => b.count - a.count);
+});
+
+// Contact suggestions for current input
+export const contactSuggestionsAtom = atom<Array<{ email: string; name?: string }>>([]);
+export const contactSuggestionIndexAtom = atom<number>(0);
+export type ContactField = "to" | "cc" | "bcc";
+export const activeContactFieldAtom = atom<ContactField>("to");
 export const replyAttachmentsAtom = atom<string[]>([]);
 
 // Reply view mode: compact (bottom-right popup) or fullscreen
@@ -118,6 +246,14 @@ export const focusedImageIndexAtom = atom<number>(-1);
 // Whether we're in "image navigation" mode in the body
 export const imageNavModeAtom = atom<boolean>(false);
 
+// Link navigation in the email body
+export const emailLinksAtom = atom<{ href: string; lineIndex: number }[]>([]);
+export const activeLinkIndexAtom = atom<number>(-1); // -1 = not navigating links
+
+// Bulk selection
+export const selectedThreadIdsAtom = atom<Set<string>>(new Set<string>());
+export const bulkModeAtom = atom<boolean>(false);
+
 // Folder sidebar state
 export const folderSidebarOpenAtom = atom<boolean>(false);
 export const selectedFolderIndexAtom = atom<number>(0);
@@ -136,24 +272,25 @@ export const isReplyingAtom = atom((get) => get(replyModeAtom) !== null);
 
 // ===== Derived Atoms =====
 
-// Get emails filtered by current label
+// Get emails filtered by current label and account
 export const filteredEmailsAtom = atom((get) => {
   const emails = get(emailsAtom);
   const label = get(currentLabelAtom);
   const searchQuery = get(searchQueryAtom);
   const focus = get(focusAtom);
+  const accountFilter = get(accountFilterAtom);
   
   let filtered = emails.filter(e => e.labelIds.includes(label));
   
+  // Apply account filter
+  if (accountFilter) {
+    filtered = filtered.filter(e => e.accountEmail === accountFilter);
+  }
+  
   // Apply search filter if in search mode
   if (focus === "search" && searchQuery.trim()) {
-    const query = searchQuery.toLowerCase();
-    filtered = filtered.filter(e => 
-      e.subject.toLowerCase().includes(query) ||
-      e.from.name?.toLowerCase().includes(query) ||
-      e.from.email.toLowerCase().includes(query) ||
-      e.snippet.toLowerCase().includes(query)
-    );
+    const filters = parseSearchQuery(searchQuery);
+    filtered = filtered.filter(e => matchesSearch(e, filters));
   }
   
   // Sort by date, newest first
@@ -162,18 +299,33 @@ export const filteredEmailsAtom = atom((get) => {
   );
 });
 
-// Get currently selected email
-export const selectedEmailAtom = atom((get) => {
-  const emails = get(emailsAtom);
-  const selectedId = get(selectedEmailIdAtom);
-  return selectedId ? emails.find(e => e.id === selectedId) ?? null : null;
+// Threads grouped from filtered emails
+export const filteredThreadsAtom = atom((get) => {
+  const emails = get(filteredEmailsAtom);
+  return groupIntoThreads(emails);
 });
 
-// Get selected index in filtered list
+// Selected thread ID (we select threads, not individual emails)
+export const selectedThreadIdAtom = atom<string | null>(null);
+
+// Get currently selected thread
+export const selectedThreadAtom = atom((get) => {
+  const threads = get(filteredThreadsAtom);
+  const threadId = get(selectedThreadIdAtom);
+  return threadId ? threads.find(t => t.id === threadId) ?? null : null;
+});
+
+// Get currently selected email (latest in selected thread, for compatibility)
+export const selectedEmailAtom = atom((get) => {
+  const thread = get(selectedThreadAtom);
+  return thread ? thread.latest : null;
+});
+
+// Get selected index in filtered thread list
 export const selectedIndexAtom = atom((get) => {
-  const filtered = get(filteredEmailsAtom);
-  const selectedId = get(selectedEmailIdAtom);
-  return filtered.findIndex(e => e.id === selectedId);
+  const threads = get(filteredThreadsAtom);
+  const threadId = get(selectedThreadIdAtom);
+  return threads.findIndex(t => t.id === threadId);
 });
 
 // Get unread count for current label
@@ -182,10 +334,10 @@ export const unreadCountAtom = atom((get) => {
   return filtered.filter(e => e.labelIds.includes("UNREAD")).length;
 });
 
-// Get total count for current label
+// Get total count for current label (thread count)
 export const totalCountAtom = atom((get) => {
-  const filtered = get(filteredEmailsAtom);
-  return filtered.length;
+  const threads = get(filteredThreadsAtom);
+  return threads.length;
 });
 
 // Get top overlay
@@ -200,9 +352,34 @@ export const hasOverlayAtom = atom((get) => {
   return stack.length > 0;
 });
 
-// Get label counts
+// Get label counts — uses Gmail API counts when available, falls back to local count
 export const labelCountsAtom = atom((get) => {
+  const gmailCounts = get(gmailLabelCountsAtom);
+  const isLoggedIn = get(isLoggedInAtom);
+
+  // When logged in, prefer server-side counts (accurate even when we only cache 30 emails)
+  if (isLoggedIn && Object.keys(gmailCounts).length > 0) {
+    // Ensure all folders have an entry
+    const defaults: Record<string, { total: number; unread: number }> = {
+      INBOX: { total: 0, unread: 0 },
+      SENT: { total: 0, unread: 0 },
+      DRAFT: { total: 0, unread: 0 },
+      TRASH: { total: 0, unread: 0 },
+      SPAM: { total: 0, unread: 0 },
+      STARRED: { total: 0, unread: 0 },
+      IMPORTANT: { total: 0, unread: 0 },
+    };
+    return { ...defaults, ...gmailCounts };
+  }
+
+  // Fallback: derive counts from locally cached emails
   const emails = get(emailsAtom);
+  const accountFilter = get(accountFilterAtom);
+  
+  const filtered = accountFilter
+    ? emails.filter(e => e.accountEmail === accountFilter)
+    : emails;
+  
   const counts: Record<string, { total: number; unread: number }> = {
     INBOX: { total: 0, unread: 0 },
     SENT: { total: 0, unread: 0 },
@@ -213,7 +390,7 @@ export const labelCountsAtom = atom((get) => {
     IMPORTANT: { total: 0, unread: 0 },
   };
   
-  for (const email of emails) {
+  for (const email of filtered) {
     for (const label of email.labelIds) {
       if (counts[label]) {
         counts[label].total++;

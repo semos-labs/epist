@@ -178,6 +178,8 @@ export interface Email {
   calendarEvent?: CalendarEvent;
   /** Estimated total size in bytes */
   sizeEstimate?: number;
+  /** Which account this email belongs to (email address) */
+  accountEmail?: string;
 }
 
 // ===== Derived helpers =====
@@ -200,6 +202,60 @@ export function hasAttachments(email: Email): boolean {
 
 export function hasCalendarInvite(email: Email): boolean {
   return email.calendarEvent != null;
+}
+
+// ===== Threading =====
+
+export interface Thread {
+  id: string; // threadId
+  /** All messages in the thread, sorted oldest→newest */
+  messages: Email[];
+  /** The latest message (for list display) */
+  latest: Email;
+  /** Subject (from the first message, stripped of Re:/Fwd:) */
+  subject: string;
+  /** Number of messages in thread */
+  count: number;
+  /** Whether any message is unread */
+  hasUnread: boolean;
+  /** Latest date across all messages */
+  date: string;
+}
+
+/** Strip Re:/Fwd: prefixes from subject for thread grouping */
+export function normalizeSubject(subject: string): string {
+  return subject.replace(/^(Re|Fwd|Fw):\s*/gi, "").trim();
+}
+
+/** Group emails into threads, sorted by latest message date (newest first) */
+export function groupIntoThreads(emails: Email[]): Thread[] {
+  const threadMap = new Map<string, Email[]>();
+
+  for (const email of emails) {
+    const existing = threadMap.get(email.threadId) || [];
+    existing.push(email);
+    threadMap.set(email.threadId, existing);
+  }
+
+  const threads: Thread[] = [];
+  for (const [threadId, messages] of threadMap) {
+    // Sort messages oldest → newest within thread
+    messages.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    const latest = messages[messages.length - 1]!;
+    threads.push({
+      id: threadId,
+      messages,
+      latest,
+      subject: normalizeSubject(messages[0]!.subject),
+      count: messages.length,
+      hasUnread: messages.some(m => m.labelIds.includes("UNREAD")),
+      date: latest.date,
+    });
+  }
+
+  // Sort threads by latest message date, newest first
+  threads.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  return threads;
 }
 
 // Format email address for display

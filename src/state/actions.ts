@@ -2,9 +2,12 @@ import { atom } from "jotai";
 import {
   emailsAtom,
   selectedEmailIdAtom,
+  selectedThreadIdAtom,
   selectedIndexAtom,
   filteredEmailsAtom,
+  filteredThreadsAtom,
   selectedEmailAtom,
+  selectedThreadAtom,
   focusAtom,
   currentLabelAtom,
   overlayStackAtom,
@@ -16,7 +19,9 @@ import {
   messageVisibleAtom,
   listScrollOffsetAtom,
   viewScrollOffsetAtom,
-  headersExpandedAtom,
+  expandedHeadersAtom,
+  debugHtmlAtom,
+  focusedMessageIndexAtom,
   replyModeAtom,
   replyToAtom,
   replyCcAtom,
@@ -24,6 +29,14 @@ import {
   replySubjectAtom,
   replyContentAtom,
   replyAttachmentsAtom,
+  draftIdAtom,
+  signatureAtom,
+  inlineReplyOpenAtom,
+  inlineReplyContentAtom,
+  contactsAtom,
+  contactSuggestionsAtom,
+  contactSuggestionIndexAtom,
+  activeContactFieldAtom,
   replyFullscreenAtom,
   replyShowCcBccAtom,
   selectedAttachmentIndexAtom,
@@ -39,27 +52,170 @@ import {
   attachmentPickerCwdAtom,
   focusedImageIndexAtom,
   imageNavModeAtom,
+  emailLinksAtom,
+  activeLinkIndexAtom,
   folderSidebarOpenAtom,
   selectedFolderIndexAtom,
+  selectedThreadIdsAtom,
+  bulkModeAtom,
+  undoStackAtom,
+  configAtom,
+  accountsAtom,
+  activeAccountIndexAtom,
+  replyFromAccountIndexAtom,
+  replyFromAccountAtom,
+  isLoggedInAtom,
+  isAuthLoadingAtom,
+  googleAccountsAtom,
+  gmailLabelCountsAtom,
+  hasMoreEmailsAtom,
+  isSyncingAtom,
   type FocusContext,
   type Overlay,
   type MessageType,
 } from "./atoms.ts";
 import { openFile, quickLook, saveFile } from "../utils/files.ts";
+import { saveDraft, deleteDraft } from "../utils/drafts.ts";
+import { loadConfig, saveConfig, resolvePath, type EpistConfig } from "../utils/config.ts";
 import { collectFiles, filterFiles, clearFileCache } from "../utils/fzf.ts";
 import { formatEmailAddress, formatEmailAddresses, isStarred, isUnread, FOLDER_LABELS, type FolderLabel, type LabelId, type AttendeeStatus } from "../domain/email.ts";
 import { findCommand, getAllCommands } from "../keybinds/registry.ts";
 
+// ===== Configuration =====
+
+// Load config from disk and apply to atoms
+export const loadConfigAtom = atom(
+  null,
+  async (get, set) => {
+    const config = await loadConfig();
+    set(configAtom, config);
+
+    // Apply config values to relevant atoms
+    if (config.signature.enabled) {
+      set(signatureAtom, `\n${config.signature.text}`);
+    } else {
+      set(signatureAtom, "");
+    }
+
+    set(downloadsPathAtom, resolvePath(config.general.downloads_path));
+
+    // Set default account index
+    const defaultIdx = config.accounts.findIndex(a => a.is_default);
+    set(activeAccountIndexAtom, defaultIdx >= 0 ? defaultIdx : 0);
+    set(replyFromAccountIndexAtom, defaultIdx >= 0 ? defaultIdx : 0);
+  }
+);
+
+// Save current config to disk
+export const saveConfigAtom = atom(
+  null,
+  async (get) => {
+    const config = get(configAtom);
+    await saveConfig(config);
+  }
+);
+
+// Update a config section and save
+export const updateConfigAtom = atom(
+  null,
+  async (get, set, update: Partial<EpistConfig>) => {
+    const current = get(configAtom);
+    const updated = { ...current, ...update };
+    set(configAtom, updated);
+
+    // Re-apply relevant settings
+    if (update.signature) {
+      if (updated.signature.enabled) {
+        set(signatureAtom, `\n${updated.signature.text}`);
+      } else {
+        set(signatureAtom, "");
+      }
+    }
+    if (update.general?.downloads_path) {
+      set(downloadsPathAtom, resolvePath(updated.general.downloads_path));
+    }
+
+    await saveConfig(updated);
+    set(showMessageAtom, { text: "Configuration saved", type: "success" });
+  }
+);
+
+// ===== Multi-Account Actions =====
+
+// Set the reply/compose "From" account by index
+export const setReplyAccountAtom = atom(
+  null,
+  (get, set, index: number) => {
+    const accounts = get(accountsAtom);
+    if (index < 0 || index >= accounts.length) return;
+    set(replyFromAccountIndexAtom, index);
+
+    // Update signature if the new account has a per-account one
+    const account = accounts[index];
+    if (account?.signature) {
+      set(signatureAtom, `\n${account.signature}`);
+    } else {
+      // Fall back to global signature
+      const config = get(configAtom);
+      if (config.signature.enabled) {
+        set(signatureAtom, `\n${config.signature.text}`);
+      } else {
+        set(signatureAtom, "");
+      }
+    }
+  }
+);
+
+// ===== Undo System =====
+const MAX_UNDO_STACK = 20;
+
+// Push current state to undo stack (call before mutating emails)
+export const pushUndoAtom = atom(
+  null,
+  (get, set, description: string) => {
+    const emails = get(emailsAtom);
+    const selectedThreadId = get(selectedThreadIdAtom);
+    const stack = get(undoStackAtom);
+    const entry = {
+      description,
+      emails: [...emails], // shallow copy of array, each email is immutable
+      selectedThreadId,
+      timestamp: Date.now(),
+    };
+    // Keep stack bounded
+    set(undoStackAtom, [entry, ...stack].slice(0, MAX_UNDO_STACK));
+  }
+);
+
+// Undo last action
+export const undoAtom = atom(
+  null,
+  (get, set) => {
+    const stack = get(undoStackAtom);
+    if (stack.length === 0) {
+      set(showMessageAtom, { text: "Nothing to undo", type: "info" });
+      return;
+    }
+    const [entry, ...rest] = stack;
+    set(emailsAtom, entry!.emails);
+    if (entry!.selectedThreadId) {
+      set(selectedThreadIdAtom, entry!.selectedThreadId);
+    }
+    set(undoStackAtom, rest);
+    set(showMessageAtom, { text: `Undone: ${entry!.description}`, type: "info" });
+  }
+);
+
 // ===== Navigation Actions =====
 
-// Move email selection up/down
+// Move thread selection up/down
 export const moveSelectionAtom = atom(
   null,
   (get, set, direction: "up" | "down" | "first" | "last") => {
-    const filtered = get(filteredEmailsAtom);
+    const threads = get(filteredThreadsAtom);
     const currentIndex = get(selectedIndexAtom);
     
-    if (filtered.length === 0) return;
+    if (threads.length === 0) return;
     
     let newIndex: number;
     switch (direction) {
@@ -67,19 +223,31 @@ export const moveSelectionAtom = atom(
         newIndex = Math.max(0, currentIndex - 1);
         break;
       case "down":
-        newIndex = Math.min(filtered.length - 1, currentIndex + 1);
+        newIndex = Math.min(threads.length - 1, currentIndex + 1);
         break;
       case "first":
         newIndex = 0;
         break;
       case "last":
-        newIndex = filtered.length - 1;
+        newIndex = threads.length - 1;
         break;
     }
     
-    const newEmail = filtered[newIndex];
-    if (newEmail) {
-      set(selectedEmailIdAtom, newEmail.id);
+    const thread = threads[newIndex];
+    if (thread) {
+      set(selectedThreadIdAtom, thread.id);
+      set(activeLinkIndexAtom, -1);
+    }
+
+    // Auto-load more when within 5 items of the bottom
+    const LOAD_MORE_THRESHOLD = 5;
+    if (
+      direction === "down" &&
+      newIndex >= threads.length - LOAD_MORE_THRESHOLD &&
+      get(hasMoreEmailsAtom) &&
+      !get(isSyncingAtom)
+    ) {
+      set(loadMoreEmailsAtom);
     }
   }
 );
@@ -115,13 +283,21 @@ export const markReadAtom = atom(
     if (!id) return;
     
     const emails = get(emailsAtom);
+    const email = emails.find(e => e.id === id);
     set(emailsAtom, emails.map(e => 
       e.id === id ? { ...e, labelIds: e.labelIds.filter(l => l !== "UNREAD") } : e
     ));
+
+    // Fire-and-forget Gmail API call
+    if (get(isLoggedInAtom) && email?.accountEmail) {
+      import("../api/gmail.ts").then(({ markAsRead }) => 
+        markAsRead(email.accountEmail!, id).catch(() => {})
+      );
+    }
   }
 );
 
-// Mark email as unread (add UNREAD label)
+// Toggle read/unread on email
 export const markUnreadAtom = atom(
   null,
   (get, set, emailId?: string) => {
@@ -129,12 +305,27 @@ export const markUnreadAtom = atom(
     if (!id) return;
     
     const emails = get(emailsAtom);
+    const email = emails.find(e => e.id === id);
+    if (!email) return;
+
+    const wasUnread = email.labelIds.includes("UNREAD");
     set(emailsAtom, emails.map(e => 
-      e.id === id && !e.labelIds.includes("UNREAD")
-        ? { ...e, labelIds: [...e.labelIds, "UNREAD"] }
+      e.id === id
+        ? { ...e, labelIds: wasUnread 
+            ? e.labelIds.filter(l => l !== "UNREAD")
+            : [...e.labelIds, "UNREAD"] 
+          }
         : e
     ));
-    set(showMessageAtom, { text: "Marked as unread", type: "info" });
+    set(showMessageAtom, { text: wasUnread ? "Marked as read" : "Marked as unread", type: "info" });
+
+    // Fire-and-forget Gmail API call
+    if (get(isLoggedInAtom) && email.accountEmail) {
+      import("../api/gmail.ts").then(({ markAsRead, markAsUnread }) => {
+        const fn = wasUnread ? markAsRead : markAsUnread;
+        fn(email.accountEmail!, id).catch(() => {});
+      });
+    }
   }
 );
 
@@ -160,40 +351,62 @@ export const toggleStarAtom = atom(
       text: wasStarred ? "Unstarred" : "★ Starred", 
       type: "info" 
     });
+
+    // Fire-and-forget Gmail API call
+    if (get(isLoggedInAtom) && email.accountEmail) {
+      import("../api/gmail.ts").then(({ starMessage, unstarMessage }) => {
+        const fn = wasStarred ? unstarMessage : starMessage;
+        fn(email.accountEmail!, id).catch(() => {});
+      });
+    }
   }
 );
 
-// Archive email (remove INBOX label — Gmail doesn't have an explicit ARCHIVE label)
+// Archive thread (remove INBOX label from all messages in thread)
 export const archiveEmailAtom = atom(
   null,
-  (get, set, emailId?: string) => {
-    const id = emailId ?? get(selectedEmailIdAtom);
-    if (!id) return;
+  (get, set) => {
+    const thread = get(selectedThreadAtom);
+    if (!thread) return;
     
+    set(pushUndoAtom, "Archive");
+    const threadMessageIds = new Set(thread.messages.map(m => m.id));
     const emails = get(emailsAtom);
     set(emailsAtom, emails.map(e => {
-      if (e.id === id) {
+      if (threadMessageIds.has(e.id)) {
         return { ...e, labelIds: e.labelIds.filter(l => l !== "INBOX") };
       }
       return e;
     }));
     
-    // Move selection to next email
     set(moveSelectionAtom, "down");
-    set(showMessageAtom, { text: "Archived", type: "success" });
+    set(showMessageAtom, { text: "Archived (z to undo)", type: "success" });
+
+    // Fire-and-forget Gmail API calls
+    if (get(isLoggedInAtom)) {
+      import("../api/gmail.ts").then(({ archiveMessage }) => {
+        for (const msg of thread.messages) {
+          if (msg.accountEmail) {
+            archiveMessage(msg.accountEmail, msg.id).catch(() => {});
+          }
+        }
+      });
+    }
   }
 );
 
-// Delete email (move to trash — remove INBOX, add TRASH)
+// Delete thread (move to trash — all messages)
 export const deleteEmailAtom = atom(
   null,
-  (get, set, emailId?: string) => {
-    const id = emailId ?? get(selectedEmailIdAtom);
-    if (!id) return;
+  (get, set) => {
+    const thread = get(selectedThreadAtom);
+    if (!thread) return;
     
+    set(pushUndoAtom, "Delete");
+    const threadMessageIds = new Set(thread.messages.map(m => m.id));
     const emails = get(emailsAtom);
     set(emailsAtom, emails.map(e => {
-      if (e.id === id) {
+      if (threadMessageIds.has(e.id)) {
         const newLabelIds = e.labelIds.filter(l => l !== "INBOX");
         if (!newLabelIds.includes("TRASH")) {
           newLabelIds.push("TRASH");
@@ -203,25 +416,244 @@ export const deleteEmailAtom = atom(
       return e;
     }));
     
-    // Move selection to next email
     set(moveSelectionAtom, "down");
-    set(showMessageAtom, { text: "Moved to trash", type: "success" });
+    set(showMessageAtom, { text: "Moved to trash (z to undo)", type: "success" });
+
+    // Fire-and-forget Gmail API calls
+    if (get(isLoggedInAtom)) {
+      import("../api/gmail.ts").then(({ trashMessage }) => {
+        for (const msg of thread.messages) {
+          if (msg.accountEmail) {
+            trashMessage(msg.accountEmail, msg.id).catch(() => {});
+          }
+        }
+      });
+    }
   }
 );
 
 // Change current label/folder
 export const changeLabelAtom = atom(
   null,
-  (get, set, label: FolderLabel) => {
+  async (get, set, label: FolderLabel) => {
     set(currentLabelAtom, label);
-    set(selectedEmailIdAtom, null);
+    set(selectedThreadIdAtom, null);
     set(listScrollOffsetAtom, 0);
     
-    // Select first email in new label
-    const filtered = get(filteredEmailsAtom);
-    if (filtered.length > 0) {
-      set(selectedEmailIdAtom, filtered[0]!.id);
+    // Select first thread already cached for this label
+    const threads = get(filteredThreadsAtom);
+    if (threads.length > 0) {
+      set(selectedThreadIdAtom, threads[0]!.id);
     }
+
+    // If logged in, fetch emails for this label from Gmail
+    if (get(isLoggedInAtom)) {
+      const { fetchForLabel } = await import("../lib/sync.ts");
+      set(isSyncingAtom, true);
+      try {
+        await fetchForLabel(label as string);
+        // After fetch, re-select first thread if nothing selected
+        if (!get(selectedThreadIdAtom)) {
+          const newThreads = get(filteredThreadsAtom);
+          if (newThreads.length > 0) {
+            set(selectedThreadIdAtom, newThreads[0]!.id);
+          }
+        }
+      } finally {
+        set(isSyncingAtom, false);
+      }
+    }
+  }
+);
+
+// Move thread to a target folder
+export const moveToFolderAtom = atom(
+  null,
+  (get, set, targetLabel: FolderLabel) => {
+    const thread = get(selectedThreadAtom);
+    if (!thread) return;
+
+    set(pushUndoAtom, `Move to ${targetLabel}`);
+    const threadMessageIds = new Set(thread.messages.map(m => m.id));
+    const currentLabel = get(currentLabelAtom);
+    const emails = get(emailsAtom);
+
+    set(emailsAtom, emails.map(e => {
+      if (!threadMessageIds.has(e.id)) return e;
+      let newLabels = e.labelIds.filter(l => l !== currentLabel);
+      if (!newLabels.includes(targetLabel)) {
+        newLabels.push(targetLabel);
+      }
+      return { ...e, labelIds: newLabels };
+    }));
+
+    set(moveSelectionAtom, "down");
+    set(showMessageAtom, { text: `Moved to ${targetLabel.charAt(0) + targetLabel.slice(1).toLowerCase()} (z to undo)`, type: "success" });
+  }
+);
+
+// Open move-to-folder picker
+export const openMoveToFolderAtom = atom(
+  null,
+  (get, set) => {
+    const thread = get(selectedThreadAtom);
+    if (!thread) return;
+    set(pushOverlayAtom, { kind: "moveToFolder" });
+  }
+);
+
+// ===== Bulk Selection Actions =====
+
+// Toggle selection of current thread
+export const toggleThreadSelectionAtom = atom(
+  null,
+  (get, set) => {
+    const thread = get(selectedThreadAtom);
+    if (!thread) return;
+
+    const selected = new Set(get(selectedThreadIdsAtom));
+    if (selected.has(thread.id)) {
+      selected.delete(thread.id);
+    } else {
+      selected.add(thread.id);
+    }
+    set(selectedThreadIdsAtom, selected);
+
+    // Auto-enable bulk mode when selecting
+    if (selected.size > 0) {
+      set(bulkModeAtom, true);
+    }
+  }
+);
+
+// Clear all selections
+export const clearBulkSelectionAtom = atom(
+  null,
+  (_get, set) => {
+    set(selectedThreadIdsAtom, new Set());
+    set(bulkModeAtom, false);
+  }
+);
+
+// Select all threads in current view
+export const selectAllThreadsAtom = atom(
+  null,
+  (get, set) => {
+    const threads = get(filteredThreadsAtom);
+    set(selectedThreadIdsAtom, new Set(threads.map(t => t.id)));
+    set(bulkModeAtom, true);
+  }
+);
+
+// Bulk archive
+export const bulkArchiveAtom = atom(
+  null,
+  (get, set) => {
+    const selectedIds = get(selectedThreadIdsAtom);
+    if (selectedIds.size === 0) return;
+
+    set(pushUndoAtom, `Bulk archive ${selectedIds.size} threads`);
+    const threads = get(filteredThreadsAtom);
+    const emailIdsToArchive = new Set<string>();
+    for (const thread of threads) {
+      if (selectedIds.has(thread.id)) {
+        for (const msg of thread.messages) {
+          emailIdsToArchive.add(msg.id);
+        }
+      }
+    }
+
+    const emails = get(emailsAtom);
+    set(emailsAtom, emails.map(e =>
+      emailIdsToArchive.has(e.id)
+        ? { ...e, labelIds: e.labelIds.filter(l => l !== "INBOX") }
+        : e
+    ));
+
+    set(showMessageAtom, { text: `Archived ${selectedIds.size} threads (z to undo)`, type: "success" });
+    set(clearBulkSelectionAtom);
+  }
+);
+
+// Bulk delete
+export const bulkDeleteAtom = atom(
+  null,
+  (get, set) => {
+    const selectedIds = get(selectedThreadIdsAtom);
+    if (selectedIds.size === 0) return;
+
+    set(pushUndoAtom, `Bulk delete ${selectedIds.size} threads`);
+    const threads = get(filteredThreadsAtom);
+    const emailIdsToDelete = new Set<string>();
+    for (const thread of threads) {
+      if (selectedIds.has(thread.id)) {
+        for (const msg of thread.messages) {
+          emailIdsToDelete.add(msg.id);
+        }
+      }
+    }
+
+    const emails = get(emailsAtom);
+    set(emailsAtom, emails.map(e => {
+      if (!emailIdsToDelete.has(e.id)) return e;
+      const newLabels = e.labelIds.filter(l => l !== "INBOX");
+      if (!newLabels.includes("TRASH")) newLabels.push("TRASH");
+      return { ...e, labelIds: newLabels };
+    }));
+
+    set(showMessageAtom, { text: `Deleted ${selectedIds.size} threads (z to undo)`, type: "success" });
+    set(clearBulkSelectionAtom);
+  }
+);
+
+// Bulk mark read
+export const bulkMarkReadAtom = atom(
+  null,
+  (get, set) => {
+    const selectedIds = get(selectedThreadIdsAtom);
+    if (selectedIds.size === 0) return;
+
+    const threads = get(filteredThreadsAtom);
+    const emailIds = new Set<string>();
+    for (const thread of threads) {
+      if (selectedIds.has(thread.id)) {
+        for (const msg of thread.messages) emailIds.add(msg.id);
+      }
+    }
+
+    const emails = get(emailsAtom);
+    set(emailsAtom, emails.map(e =>
+      emailIds.has(e.id) ? { ...e, labelIds: e.labelIds.filter(l => l !== "UNREAD") } : e
+    ));
+    set(showMessageAtom, { text: `Marked ${selectedIds.size} threads as read`, type: "success" });
+    set(clearBulkSelectionAtom);
+  }
+);
+
+// Bulk star
+export const bulkToggleStarAtom = atom(
+  null,
+  (get, set) => {
+    const selectedIds = get(selectedThreadIdsAtom);
+    if (selectedIds.size === 0) return;
+
+    const threads = get(filteredThreadsAtom);
+    const emailIds = new Set<string>();
+    for (const thread of threads) {
+      if (selectedIds.has(thread.id)) {
+        for (const msg of thread.messages) emailIds.add(msg.id);
+      }
+    }
+
+    const emails = get(emailsAtom);
+    set(emailsAtom, emails.map(e => {
+      if (!emailIds.has(e.id)) return e;
+      return e.labelIds.includes("STARRED")
+        ? { ...e, labelIds: e.labelIds.filter(l => l !== "STARRED") }
+        : { ...e, labelIds: [...e.labelIds, "STARRED"] };
+    }));
+    set(showMessageAtom, { text: `Toggled star on ${selectedIds.size} threads`, type: "success" });
+    set(clearBulkSelectionAtom);
   }
 );
 
@@ -303,9 +735,9 @@ export const executeCommandAtom = atom(
         })
       : allCommands;
     
-    // Get command to execute
+    // Get command to execute — prefer palette selection, fall back to text input
     let command: ReturnType<typeof findCommand>;
-    if (!input.trim() && filteredCommands[selectedIndex]) {
+    if (filteredCommands[selectedIndex]) {
       command = { 
         name: filteredCommands[selectedIndex]!.name, 
         action: filteredCommands[selectedIndex]!.action 
@@ -333,10 +765,10 @@ export const executeCommandAtom = atom(
         set(toggleStarAtom, undefined);
         break;
       case "archive":
-        set(archiveEmailAtom, undefined);
+        set(archiveEmailAtom);
         break;
       case "delete":
-        set(deleteEmailAtom, undefined);
+        set(deleteEmailAtom);
         break;
       case "markRead":
         set(markReadAtom, undefined);
@@ -359,12 +791,51 @@ export const executeCommandAtom = atom(
       case "gotoStarred":
         set(changeLabelAtom, "STARRED");
         break;
+      case "moveToFolder":
+        set(openMoveToFolderAtom);
+        break;
+      case "undo":
+        set(undoAtom);
+        break;
+      case "reply":
+        set(replyEmailAtom);
+        break;
+      case "replyAll":
+        set(replyAllEmailAtom);
+        break;
+      case "forward":
+        set(forwardEmailAtom);
+        break;
+      case "compose":
+        set(composeEmailAtom);
+        break;
+      case "openSearch":
+        set(openSearchAtom);
+        break;
+      case "login":
+        set(loginAtom);
+        break;
+      case "logout":
+        set(logoutAtom);
+        break;
+      case "accounts":
+        set(openAccountsDialogAtom);
+        break;
+      case "sync":
+        set(syncEmailsAtom);
+        break;
+      case "reset-sync":
+        set(resetSyncAtom);
+        break;
       default:
         set(showMessageAtom, { text: `Executed: ${command.name}`, type: "info" });
     }
     
-    // Close command bar
-    set(focusAtom, "list");
+    // Close command bar — only reset to list if focus wasn't changed by the action
+    const currentFocus = get(focusAtom);
+    if (currentFocus === "command") {
+      set(focusAtom, "list");
+    }
     set(messageVisibleAtom, true);
   }
 );
@@ -378,10 +849,10 @@ export const updateSearchQueryAtom = atom(
     set(searchQueryAtom, query);
     set(searchSelectedIndexAtom, 0);
     
-    // Update selection to first matching email
-    const filtered = get(filteredEmailsAtom);
-    if (filtered.length > 0) {
-      set(selectedEmailIdAtom, filtered[0]!.id);
+    // Update selection to first matching thread
+    const threads = get(filteredThreadsAtom);
+    if (threads.length > 0) {
+      set(selectedThreadIdAtom, threads[0]!.id);
     }
   }
 );
@@ -451,12 +922,118 @@ export const scrollViewAtom = atom(
   }
 );
 
-// Toggle headers visibility
+// Toggle headers visibility for the focused message
 export const toggleHeadersAtom = atom(
   null,
   (get, set) => {
-    const current = get(headersExpandedAtom);
-    set(headersExpandedAtom, !current);
+    const thread = get(selectedThreadAtom);
+    const email = get(selectedEmailAtom);
+    if (!thread || !email) return;
+
+    // Determine which message to toggle
+    let messageId: string;
+    if (thread.count > 1) {
+      // UI displays messages in reverse (latest first), so map the UI index back
+      const idx = get(focusedMessageIndexAtom);
+      const uiIdx = idx < 0 ? 0 : idx;
+      const reversed = [...thread.messages].reverse();
+      messageId = reversed[uiIdx]?.id ?? email.id;
+    } else {
+      messageId = email.id;
+    }
+
+    const current = { ...get(expandedHeadersAtom) };
+    if (current[messageId]) {
+      delete current[messageId];
+    } else {
+      current[messageId] = true;
+    }
+    set(expandedHeadersAtom, current);
+  }
+);
+
+// Toggle raw HTML debug view for the focused message
+export const toggleDebugHtmlAtom = atom(
+  null,
+  (get, set) => {
+    const thread = get(selectedThreadAtom);
+    const email = get(selectedEmailAtom);
+    if (!thread || !email) return;
+
+    let messageId: string;
+    if (thread.count > 1) {
+      const idx = get(focusedMessageIndexAtom);
+      const uiIdx = idx < 0 ? 0 : idx;
+      const reversed = [...thread.messages].reverse();
+      messageId = reversed[uiIdx]?.id ?? email.id;
+    } else {
+      messageId = email.id;
+    }
+
+    const current = { ...get(debugHtmlAtom) };
+    if (current[messageId]) {
+      delete current[messageId];
+    } else {
+      current[messageId] = true;
+    }
+    set(debugHtmlAtom, current);
+  }
+);
+
+// Copy raw HTML of focused message to clipboard via pbcopy
+export const copyHtmlToClipboardAtom = atom(
+  null,
+  async (get, set) => {
+    const thread = get(selectedThreadAtom);
+    const email = get(selectedEmailAtom);
+    if (!thread || !email) return;
+
+    let msg: typeof email;
+    if (thread.count > 1) {
+      const idx = get(focusedMessageIndexAtom);
+      const uiIdx = idx < 0 ? 0 : idx;
+      const reversed = [...thread.messages].reverse();
+      msg = reversed[uiIdx] ?? email;
+    } else {
+      msg = email;
+    }
+
+    const rawHtml = msg.bodyHtml || msg.body;
+    if (!rawHtml) {
+      set(showMessageAtom, { text: "No HTML body to copy", type: "warning" });
+      return;
+    }
+
+    try {
+      const proc = Bun.spawn(["pbcopy"], { stdin: "pipe" });
+      proc.stdin.write(rawHtml);
+      proc.stdin.end();
+      await proc.exited;
+      set(showMessageAtom, { text: `Copied ${rawHtml.length} chars of raw HTML to clipboard`, type: "success" });
+    } catch (err) {
+      set(showMessageAtom, { text: `Failed to copy: ${err instanceof Error ? err.message : err}`, type: "error" });
+    }
+  }
+);
+
+// Move focused message within a thread
+export const moveFocusedMessageAtom = atom(
+  null,
+  (get, set, direction: "next" | "prev") => {
+    const thread = get(selectedThreadAtom);
+    if (!thread || thread.count <= 1) return;
+
+    const current = get(focusedMessageIndexAtom);
+    const lastIdx = thread.messages.length - 1;
+    const resolved = current < 0 ? 0 : current;
+
+    let next: number;
+    if (direction === "next") {
+      next = Math.min(resolved + 1, lastIdx);
+    } else {
+      next = Math.max(resolved - 1, 0);
+    }
+    set(focusedMessageIndexAtom, next);
   }
 );
 
@@ -464,17 +1041,34 @@ export const toggleHeadersAtom = atom(
 export const openEmailAtom = atom(
   null,
   (get, set) => {
-    const emailId = get(selectedEmailIdAtom);
-    if (emailId) {
-      set(markReadAtom, emailId);
+    const thread = get(selectedThreadAtom);
+    if (thread) {
+      // Mark all thread messages as read
+      for (const msg of thread.messages) {
+        if (msg.labelIds.includes("UNREAD")) {
+          set(markReadAtom, msg.id);
+        }
+      }
       set(focusAtom, "view");
       set(viewScrollOffsetAtom, 0);
-      // Reset image navigation state
+      // Reset image and link navigation state
       set(imageNavModeAtom, false);
       set(focusedImageIndexAtom, -1);
+      set(activeLinkIndexAtom, -1);
+      // Reset per-message state
+      set(expandedHeadersAtom, {});
+      set(focusedMessageIndexAtom, -1);
     }
   }
 );
+
+// Helper: get the signature for the current reply account
+function getAccountSignature(get: any): string {
+  const account = get(replyFromAccountAtom);
+  if (account?.signature) return `\n${account.signature}`;
+  const sig = get(signatureAtom);
+  return sig || "";
+}
 
 // Reply to email - opens reply view
 export const replyEmailAtom = atom(
@@ -485,12 +1079,16 @@ export const replyEmailAtom = atom(
       set(showMessageAtom, { text: "No email selected", type: "error" });
       return;
     }
+    // Set reply account to active account
+    set(replyFromAccountIndexAtom, get(activeAccountIndexAtom));
+    const sig = getAccountSignature(get);
+    set(draftIdAtom, `draft-${Date.now()}`);
     set(replyModeAtom, "reply");
     set(replyToAtom, formatEmailAddress(email.from));
     set(replyCcAtom, "");
     set(replyBccAtom, "");
     set(replySubjectAtom, `Re: ${email.subject}`);
-    set(replyContentAtom, "");
+    set(replyContentAtom, sig ? `\n${sig}` : "");
     set(replyAttachmentsAtom, []);
     set(replyShowCcBccAtom, false);
     set(focusAtom, "reply");
@@ -506,9 +1104,11 @@ export const replyAllEmailAtom = atom(
       set(showMessageAtom, { text: "No email selected", type: "error" });
       return;
     }
+    set(replyFromAccountIndexAtom, get(activeAccountIndexAtom));
+    const sig = getAccountSignature(get);
+    set(draftIdAtom, `draft-${Date.now()}`);
     set(replyModeAtom, "replyAll");
     set(replyToAtom, formatEmailAddress(email.from));
-    // CC includes all other recipients (to + cc, excluding self)
     const allRecipients = [
       ...email.to.map(formatEmailAddress),
       ...(email.cc?.map(formatEmailAddress) || []),
@@ -516,17 +1116,49 @@ export const replyAllEmailAtom = atom(
     set(replyCcAtom, allRecipients);
     set(replyBccAtom, "");
     set(replySubjectAtom, `Re: ${email.subject}`);
-    set(replyContentAtom, "");
+    set(replyContentAtom, sig ? `\n${sig}` : "");
     set(replyAttachmentsAtom, []);
-    set(replyShowCcBccAtom, true); // Show CC/BCC for reply all
+    set(replyShowCcBccAtom, true);
     set(focusAtom, "reply");
   }
 );
 
-// Close reply view
+// Auto-save current draft
+export const autoSaveDraftAtom = atom(
+  null,
+  async (get) => {
+    const id = get(draftIdAtom);
+    const mode = get(replyModeAtom);
+    if (!id || !mode) return;
+
+    const content = get(replyContentAtom);
+    const to = get(replyToAtom);
+    // Only save if there's meaningful content
+    if (!content.trim() && !to.trim()) return;
+
+    await saveDraft({
+      id,
+      to,
+      cc: get(replyCcAtom),
+      bcc: get(replyBccAtom),
+      subject: get(replySubjectAtom),
+      content,
+      attachments: get(replyAttachmentsAtom),
+      mode: mode as "reply" | "replyAll" | "forward",
+      savedAt: Date.now(),
+    });
+  }
+);
+
+// Close reply view (deletes draft)
 export const closeReplyAtom = atom(
   null,
-  (get, set) => {
+  async (get, set) => {
+    const id = get(draftIdAtom);
+    if (id) {
+      await deleteDraft(id);
+    }
+    set(draftIdAtom, null);
     set(replyModeAtom, null);
     set(replyToAtom, "");
     set(replyCcAtom, "");
@@ -540,12 +1172,18 @@ export const closeReplyAtom = atom(
   }
 );
 
-// Send reply (placeholder - would integrate with email API)
+// Send reply — uses Gmail API when logged in
 export const sendReplyAtom = atom(
   null,
-  (get, set) => {
+  async (get, set) => {
     const to = get(replyToAtom);
+    const cc = get(replyCcAtom);
+    const bcc = get(replyBccAtom);
+    const subject = get(replySubjectAtom);
     const content = get(replyContentAtom);
+    const fromAccount = get(replyFromAccountAtom);
+    const isLoggedIn = get(isLoggedInAtom);
+    const selectedEmail = get(selectedEmailAtom);
     
     if (!to.trim()) {
       set(showMessageAtom, { text: "No recipients specified", type: "error" });
@@ -556,9 +1194,44 @@ export const sendReplyAtom = atom(
       set(showMessageAtom, { text: "Cannot send empty reply", type: "error" });
       return;
     }
-    
-    // For now, just show a success message and close
-    set(showMessageAtom, { text: `Reply sent to ${to}`, type: "success" });
+
+    // Delete draft on successful send
+    const id = get(draftIdAtom);
+    if (id) {
+      await deleteDraft(id);
+    }
+
+    // Try to send via Gmail API
+    if (isLoggedIn && fromAccount) {
+      try {
+        const { sendMessage } = await import("../api/gmail.ts");
+        const toList = to.split(",").map(s => s.trim()).filter(Boolean);
+        const ccList = cc ? cc.split(",").map(s => s.trim()).filter(Boolean) : undefined;
+        const bccList = bcc ? bcc.split(",").map(s => s.trim()).filter(Boolean) : undefined;
+
+        await sendMessage(fromAccount.email, {
+          to: toList,
+          cc: ccList,
+          bcc: bccList,
+          subject: subject,
+          body: content,
+          inReplyTo: selectedEmail?.messageId,
+          references: selectedEmail?.references,
+          threadId: selectedEmail?.threadId,
+        });
+
+        set(showMessageAtom, { text: `Sent from ${fromAccount.email} to ${to}`, type: "success" });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : "Unknown error";
+        set(showMessageAtom, { text: `Send failed: ${msg}`, type: "error" });
+        return; // Don't clear the form on failure
+      }
+    } else {
+      const fromLabel = fromAccount ? ` from ${fromAccount.email}` : "";
+      set(showMessageAtom, { text: `Sent${fromLabel} to ${to}`, type: "success" });
+    }
+
+    set(draftIdAtom, null);
     set(replyModeAtom, null);
     set(replyToAtom, "");
     set(replyCcAtom, "");
@@ -573,10 +1246,30 @@ export const sendReplyAtom = atom(
 );
 
 // Update reply fields
+// Helper: extract last token from comma-separated input
+function getLastToken(value: string): string {
+  const parts = value.split(",");
+  return (parts[parts.length - 1] || "").trim();
+}
+
+// Helper: fuzzy match contacts against a query
+function matchContacts(query: string, contacts: Array<{ email: string; name?: string }>): Array<{ email: string; name?: string }> {
+  if (!query || query.length < 2) return [];
+  const q = query.toLowerCase();
+  return contacts.filter(c =>
+    c.email.toLowerCase().includes(q) ||
+    (c.name && c.name.toLowerCase().includes(q))
+  ).slice(0, 5);
+}
+
 export const updateReplyToAtom = atom(
   null,
   (get, set, value: string) => {
     set(replyToAtom, value);
+    set(activeContactFieldAtom, "to");
+    const token = getLastToken(value);
+    set(contactSuggestionsAtom, matchContacts(token, get(contactsAtom)));
+    set(contactSuggestionIndexAtom, 0);
   }
 );
 
@@ -584,6 +1277,10 @@ export const updateReplyCcAtom = atom(
   null,
   (get, set, value: string) => {
     set(replyCcAtom, value);
+    set(activeContactFieldAtom, "cc");
+    const token = getLastToken(value);
+    set(contactSuggestionsAtom, matchContacts(token, get(contactsAtom)));
+    set(contactSuggestionIndexAtom, 0);
   }
 );
 
@@ -619,27 +1316,182 @@ export const toggleReplyCcBccAtom = atom(
   }
 );
 
-// Update BCC field
+// Update BCC field with contact suggestions
 export const updateReplyBccAtom = atom(
   null,
   (get, set, value: string) => {
     set(replyBccAtom, value);
+    set(activeContactFieldAtom, "bcc");
+    const token = getLastToken(value);
+    set(contactSuggestionsAtom, matchContacts(token, get(contactsAtom)));
+    set(contactSuggestionIndexAtom, 0);
   }
 );
 
-// Forward email (placeholder)
+// Navigate contact suggestions
+export const moveSuggestionAtom = atom(
+  null,
+  (get, set, direction: "next" | "prev") => {
+    const suggestions = get(contactSuggestionsAtom);
+    if (suggestions.length === 0) return;
+    const current = get(contactSuggestionIndexAtom);
+    if (direction === "next") {
+      set(contactSuggestionIndexAtom, (current + 1) % suggestions.length);
+    } else {
+      set(contactSuggestionIndexAtom, (current - 1 + suggestions.length) % suggestions.length);
+    }
+  }
+);
+
+// Accept the currently highlighted contact suggestion
+export const acceptSuggestionAtom = atom(
+  null,
+  (get, set) => {
+    const suggestions = get(contactSuggestionsAtom);
+    if (suggestions.length === 0) return;
+    const index = get(contactSuggestionIndexAtom);
+    const suggestion = suggestions[index];
+    if (!suggestion) return;
+
+    const field = get(activeContactFieldAtom);
+    const fieldAtom = field === "to" ? replyToAtom : field === "cc" ? replyCcAtom : replyBccAtom;
+    const current = get(fieldAtom);
+
+    // Replace the last token with the selected contact
+    const parts = current.split(",").map(s => s.trim());
+    parts[parts.length - 1] = suggestion.name
+      ? `${suggestion.name} <${suggestion.email}>`
+      : suggestion.email;
+    set(fieldAtom, parts.join(", ") + ", ");
+
+    // Clear suggestions
+    set(contactSuggestionsAtom, []);
+    set(contactSuggestionIndexAtom, 0);
+  }
+);
+
+// Dismiss contact suggestions
+export const dismissSuggestionsAtom = atom(
+  null,
+  (_get, set) => {
+    set(contactSuggestionsAtom, []);
+    set(contactSuggestionIndexAtom, 0);
+  }
+);
+
+// Forward email
 export const forwardEmailAtom = atom(
   null,
   (get, set) => {
-    set(showMessageAtom, { text: "Forward (coming soon)", type: "info" });
+    const email = get(selectedEmailAtom);
+    if (!email) {
+      set(showMessageAtom, { text: "No email selected", type: "error" });
+      return;
+    }
+    set(replyFromAccountIndexAtom, get(activeAccountIndexAtom));
+    const sig = getAccountSignature(get);
+    set(draftIdAtom, `draft-${Date.now()}`);
+    set(replyModeAtom, "forward");
+    set(replyToAtom, "");
+    set(replyCcAtom, "");
+    set(replyBccAtom, "");
+    set(replySubjectAtom, `Fwd: ${email.subject}`);
+    set(replyContentAtom, sig ? `\n${sig}` : "");
+    set(replyAttachmentsAtom, []);
+    set(replyShowCcBccAtom, false);
+    set(focusAtom, "reply");
   }
 );
 
-// Compose new email (placeholder)
+// Compose new email
 export const composeEmailAtom = atom(
   null,
   (get, set) => {
-    set(showMessageAtom, { text: "Compose (coming soon)", type: "info" });
+    set(replyFromAccountIndexAtom, get(activeAccountIndexAtom));
+    const sig = getAccountSignature(get);
+    set(draftIdAtom, `draft-${Date.now()}`);
+    set(replyModeAtom, "compose");
+    set(replyToAtom, "");
+    set(replyCcAtom, "");
+    set(replyBccAtom, "");
+    set(replySubjectAtom, "");
+    set(replyContentAtom, sig ? `\n${sig}` : "");
+    set(replyAttachmentsAtom, []);
+    set(replyShowCcBccAtom, false);
+    set(focusAtom, "reply");
+  }
+);
+
+// ===== Inline Reply Actions =====
+
+// Open quick inline reply at bottom of email view
+export const openInlineReplyAtom = atom(
+  null,
+  (get, set) => {
+    const email = get(selectedEmailAtom);
+    if (!email) {
+      set(showMessageAtom, { text: "No email selected", type: "error" });
+      return;
+    }
+    set(inlineReplyContentAtom, "");
+    set(inlineReplyOpenAtom, true);
+  }
+);
+
+// Close inline reply
+export const closeInlineReplyAtom = atom(
+  null,
+  (_get, set) => {
+    set(inlineReplyOpenAtom, false);
+    set(inlineReplyContentAtom, "");
+  }
+);
+
+// Update inline reply content
+export const updateInlineReplyContentAtom = atom(
+  null,
+  (_get, set, content: string) => {
+    set(inlineReplyContentAtom, content);
+  }
+);
+
+// Send inline reply
+export const sendInlineReplyAtom = atom(
+  null,
+  (get, set) => {
+    const email = get(selectedEmailAtom);
+    if (!email) return;
+
+    const content = get(inlineReplyContentAtom).trim();
+    if (!content) {
+      set(showMessageAtom, { text: "Cannot send empty reply", type: "error" });
+      return;
+    }
+
+    const fromAccount = get(replyFromAccountAtom);
+    const to = formatEmailAddress(email.from);
+    // In a real app, this would send via the backend
+    const fromLabel = fromAccount ? ` from ${fromAccount.email}` : "";
+    set(showMessageAtom, { text: `Quick reply sent${fromLabel} to ${to}`, type: "success" });
+    set(inlineReplyOpenAtom, false);
+    set(inlineReplyContentAtom, "");
+  }
+);
+
+// Expand inline reply to full compose
+export const expandInlineReplyAtom = atom(
+  null,
+  (get, set) => {
+    const content = get(inlineReplyContentAtom);
+    // Close inline reply
+    set(inlineReplyOpenAtom, false);
+    set(inlineReplyContentAtom, "");
+    // Open full reply with the content carried over
+    set(replyEmailAtom);
+    if (content.trim()) {
+      const sig = get(signatureAtom);
+      set(replyContentAtom, content + (sig ? `\n${sig}` : ""));
+    }
   }
 );
 
@@ -733,13 +1585,7 @@ export const saveAttachmentAtom = atom(
       type: "success" 
     });
     
-    // Mock: In real implementation, this would be:
-    // const result = await saveFile(attachment.localPath, downloadsPath, attachment.filename);
-    // if (result.success) {
-    //   set(showMessageAtom, { text: `Saved to: ${result.savedPath}`, type: "success" });
-    // } else {
-    //   set(showMessageAtom, { text: `Failed to save: ${result.error}`, type: "error" });
-    // }
+    // TODO: implement actual file save via Gmail attachment API
   }
 );
 
@@ -812,6 +1658,46 @@ export const resetImageStateAtom = atom(
   (get, set) => {
     set(imageNavModeAtom, false);
     set(focusedImageIndexAtom, -1);
+  }
+);
+
+// ===== Link Navigation Actions =====
+
+// Move link focus (Tab / Shift+Tab in email view)
+export const moveLinkFocusAtom = atom(
+  null,
+  (get, set, direction: "next" | "prev") => {
+    const links = get(emailLinksAtom);
+    if (links.length === 0) return;
+
+    const current = get(activeLinkIndexAtom);
+    if (direction === "next") {
+      set(activeLinkIndexAtom, current < links.length - 1 ? current + 1 : 0);
+    } else {
+      set(activeLinkIndexAtom, current > 0 ? current - 1 : links.length - 1);
+    }
+  }
+);
+
+// Open the currently focused link
+export const openActiveLinkAtom = atom(
+  null,
+  async (get) => {
+    const links = get(emailLinksAtom);
+    const index = get(activeLinkIndexAtom);
+    const link = links[index];
+    if (index >= 0 && link) {
+      const { openFile } = await import("../utils/files.ts");
+      await openFile(link.href);
+    }
+  }
+);
+
+// Reset link navigation state (called when switching emails or leaving view)
+export const resetLinkNavAtom = atom(
+  null,
+  (get, set) => {
+    set(activeLinkIndexAtom, -1);
   }
 );
 
@@ -1197,6 +2083,149 @@ export const previewComposeAttachmentAtom = atom(
     }
   }
 );
+
+// ===== Auth Actions =====
+
+// Login to Google (add a new account)
+export const loginAtom = atom(null, async (get, set) => {
+  const { startLoginFlow, getAccounts, hasGmailAccess } = await import("../auth/index.ts");
+  const { startSync, updateAccounts } = await import("../lib/sync.ts");
+
+  set(isAuthLoadingAtom, true);
+  set(showMessageAtom, { text: "Opening browser for authentication…", type: "info" });
+
+  const result = await startLoginFlow({
+    onAuthUrl: () => {
+      set(showMessageAtom, { text: "Waiting for Google sign-in…", type: "info" });
+    },
+    onSuccess: (account) => {
+      set(showMessageAtom, { text: `Logged in as ${account.email}`, type: "success" });
+    },
+    onError: (error) => {
+      set(showMessageAtom, { text: `Login failed: ${error}`, type: "error" });
+    },
+  });
+
+  set(isAuthLoadingAtom, false);
+
+  if (result.success && result.account) {
+    const accounts = await getAccounts();
+    set(googleAccountsAtom, accounts.map(a => ({
+      email: a.account.email,
+      name: a.account.name,
+      picture: a.account.picture,
+    })));
+    set(isLoggedInAtom, accounts.length > 0);
+
+    // Start sync engine with all accounts that have Gmail access
+    const gmailAccounts = accounts.filter(a => hasGmailAccess(a));
+    const gmailEmails = gmailAccounts.map(a => a.account.email);
+    updateAccounts(gmailEmails);
+
+    await startSync(gmailEmails, {
+      onEmailsUpdated: (emails) => set(emailsAtom, emails),
+      onLabelCountsUpdated: (counts) => set(gmailLabelCountsAtom, counts),
+      onStatus: (text, type) => set(showMessageAtom, { text, type }),
+      onHasMore: (hasMore) => set(hasMoreEmailsAtom, hasMore),
+    });
+  }
+});
+
+// Logout all accounts
+export const logoutAtom = atom(null, async (get, set) => {
+  const { logoutAll } = await import("../auth/index.ts");
+  const { stopSync } = await import("../lib/sync.ts");
+  const { clearAllData } = await import("../lib/database.ts");
+
+  stopSync();
+  await logoutAll();
+  clearAllData();
+
+  set(googleAccountsAtom, []);
+  set(isLoggedInAtom, false);
+  set(emailsAtom, []);
+  set(gmailLabelCountsAtom, {});
+  set(hasMoreEmailsAtom, false);
+  set(showMessageAtom, { text: "Logged out from all accounts", type: "success" });
+});
+
+// Open accounts dialog
+export const openAccountsDialogAtom = atom(null, (get, set) => {
+  set(pushOverlayAtom, { kind: "accounts" as any });
+});
+
+// Manually trigger a sync refresh
+export const syncEmailsAtom = atom(null, async (get, set) => {
+  const { manualSync } = await import("../lib/sync.ts");
+  set(isSyncingAtom, true);
+  set(showMessageAtom, { text: "Syncing…", type: "info" });
+  try {
+    await manualSync();
+  } finally {
+    set(isSyncingAtom, false);
+  }
+});
+
+// Clear cache and do a full resync from scratch
+export const resetSyncAtom = atom(null, async (get, set) => {
+  const { resetSync } = await import("../lib/sync.ts");
+  set(isSyncingAtom, true);
+  set(showMessageAtom, { text: "Clearing cache & resyncing…", type: "info" });
+  try {
+    await resetSync();
+    set(showMessageAtom, { text: "Full resync complete", type: "success" });
+  } catch (err) {
+    set(showMessageAtom, { text: `Resync failed: ${err instanceof Error ? err.message : err}`, type: "error" });
+  } finally {
+    set(isSyncingAtom, false);
+  }
+});
+
+// Load more emails (pagination — called on scroll)
+export const loadMoreEmailsAtom = atom(null, async (get, set) => {
+  const hasMore = get(hasMoreEmailsAtom);
+  if (!hasMore) return;
+
+  const { loadMore } = await import("../lib/sync.ts");
+  const currentLabel = get(currentLabelAtom);
+  set(isSyncingAtom, true);
+  try {
+    await loadMore(currentLabel);
+  } finally {
+    set(isSyncingAtom, false);
+  }
+});
+
+// Check auth state on startup and start sync if logged in
+export const checkAuthAtom = atom(null, async (get, set) => {
+  const { getAccounts, hasGmailAccess } = await import("../auth/index.ts");
+  const { startSync } = await import("../lib/sync.ts");
+
+  try {
+    const accounts = await getAccounts();
+    set(googleAccountsAtom, accounts.map(a => ({
+      email: a.account.email,
+      name: a.account.name,
+      picture: a.account.picture,
+    })));
+    set(isLoggedInAtom, accounts.length > 0);
+
+    if (accounts.length > 0) {
+      const gmailAccounts = accounts.filter(a => hasGmailAccess(a));
+      const gmailEmails = gmailAccounts.map(a => a.account.email);
+
+      // Start sync engine: loads from DB cache immediately, then fetches new data
+      await startSync(gmailEmails, {
+        onEmailsUpdated: (emails) => set(emailsAtom, emails),
+        onLabelCountsUpdated: (counts) => set(gmailLabelCountsAtom, counts),
+        onStatus: (text, type) => set(showMessageAtom, { text, type }),
+        onHasMore: (hasMore) => set(hasMoreEmailsAtom, hasMore),
+      });
+    }
+  } catch {
+    // No accounts, that's fine
+  }
+});
 
 // Get filename from path
 export function getFilename(path: string): string {

@@ -1,5 +1,5 @@
-import React from "react";
-import { Box, Text, useApp, Keybind, JumpNav } from "@nick-skriabin/glyph";
+import React, { useMemo } from "react";
+import { Box, Text, useApp, JumpNav } from "@semos-labs/glyph";
 import { Provider, useAtomValue, useSetAtom } from "jotai";
 import { EmailList } from "./EmailList.tsx";
 import { EmailView } from "./EmailView.tsx";
@@ -8,8 +8,12 @@ import { HelpDialog } from "./HelpDialog.tsx";
 import { ReplyView } from "./ReplyView.tsx";
 import { AttachmentPicker } from "./AttachmentPicker.tsx";
 import { FolderSidebar } from "./FolderSidebar.tsx";
-import { overlayStackAtom, currentLabelAtom, focusAtom, hasOverlayAtom, isReplyingAtom, folderSidebarOpenAtom } from "../state/atoms.ts";
-import { toggleFolderSidebarAtom } from "../state/actions.ts";
+import { MoveToFolderPicker } from "./MoveToFolderPicker.tsx";
+import { AccountsDialog } from "./AccountsDialog.tsx";
+import { WelcomeScreen } from "./WelcomeScreen.tsx";
+import { overlayStackAtom, currentLabelAtom, focusAtom, hasOverlayAtom, isReplyingAtom, folderSidebarOpenAtom, isLoggedInAtom } from "../state/atoms.ts";
+import { toggleFolderSidebarAtom, loadConfigAtom, checkAuthAtom } from "../state/actions.ts";
+import { ScopedKeybinds } from "../keybinds/useKeybinds.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 
 // ASCII art logo for the app
@@ -40,6 +44,10 @@ function OverlayRenderer() {
         switch (overlay.kind) {
           case "help":
             return <HelpDialog key={`help-${index}`} />;
+          case "moveToFolder":
+            return <MoveToFolderPicker key={`move-${index}`} />;
+          case "accounts":
+            return <AccountsDialog key={`accounts-${index}`} />;
           default:
             return null;
         }
@@ -88,7 +96,7 @@ function Header() {
   );
 }
 
-// Global keybinds that should only work when not in command/search/reply mode
+// Global keybinds — only active when not in command/search/reply/overlay modes
 function GlobalKeybinds() {
   const { exit } = useApp();
   const focus = useAtomValue(focusAtom);
@@ -96,20 +104,27 @@ function GlobalKeybinds() {
   const isReplying = useAtomValue(isReplyingAtom);
   const toggleFolderSidebar = useSetAtom(toggleFolderSidebarAtom);
 
-  // Only allow quit when not in command/search/reply/folders mode and no overlays
   const canQuit = focus !== "command" && focus !== "search" && focus !== "reply" && focus !== "folders" && !hasOverlay && !isReplying;
 
-  return (
-    <>
-      {canQuit && <Keybind keypress="q" onPress={() => exit()} />}
-      {canQuit && <Keybind keypress="ctrl+c" onPress={() => exit()} />}
-      <Keybind keypress="ctrl+f" onPress={() => toggleFolderSidebar()} />
-    </>
-  );
+  const handlers = useMemo(() => ({
+    quit: canQuit ? () => exit() : undefined,
+    toggleFolderSidebar: () => toggleFolderSidebar(),
+  }), [canQuit, exit, toggleFolderSidebar]);
+
+  return <ScopedKeybinds scope="global" handlers={handlers} />;
 }
 
 function AppContent() {
   const folderSidebarOpen = useAtomValue(folderSidebarOpenAtom);
+  const isLoggedIn = useAtomValue(isLoggedInAtom);
+  const loadConfig = useSetAtom(loadConfigAtom);
+  const checkAuth = useSetAtom(checkAuthAtom);
+
+  // Load config and check auth on mount
+  React.useEffect(() => {
+    loadConfig();
+    checkAuth();
+  }, []);
 
   return (
     <Box
@@ -119,50 +134,54 @@ function AppContent() {
         flexDirection: "column",
       }}
     >
-      {/* Header */}
-      <Header />
+      {isLoggedIn ? (
+        <>
+          {/* Header */}
+          <Header />
 
-      {/* Main content: two-column layout */}
-      <Box
-        style={{
-          flexGrow: 1,
-          flexShrink: 1,
-          flexDirection: "row",
-          clip: true,
-        }}
-      >
-        {/* Folder sidebar (hidden by default, Ctrl+F to toggle) */}
-        {folderSidebarOpen && (
-          <>
-            <FolderSidebar />
+          {/* Main content: two-column layout */}
+          <Box
+            style={{
+              flexGrow: 1,
+              flexShrink: 1,
+              flexDirection: "row",
+              clip: true,
+            }}
+          >
+            {/* Folder sidebar (hidden by default, Ctrl+F to toggle) */}
+            {folderSidebarOpen && (
+              <>
+                <FolderSidebar />
+                <VerticalDivider />
+              </>
+            )}
+
+            {/* Left: Email list sidebar */}
+            <EmailList />
+
+            {/* Vertical divider */}
             <VerticalDivider />
-          </>
-        )}
 
-        {/* Left: Email list sidebar */}
-        <EmailList />
+            {/* Right: Email view panel */}
+            <EmailView />
+          </Box>
 
-        {/* Vertical divider */}
-        <VerticalDivider />
+          {/* Global keybinds */}
+          <GlobalKeybinds />
 
-        {/* Right: Email view panel */}
-        <EmailView />
-      </Box>
+          {/* Reply view (modal) */}
+          <ReplyView />
 
-      {/* Status bar */}
+          {/* Attachment picker (overlays reply view) */}
+          <AttachmentPicker />
+        </>
+      ) : (
+        <WelcomeScreen />
+      )}
+
+      {/* Always visible */}
       <StatusBar />
-
-      {/* Global keybinds */}
-      <GlobalKeybinds />
-
-      {/* Overlays */}
       <OverlayRenderer />
-
-      {/* Reply view (modal) */}
-      <ReplyView />
-
-      {/* Attachment picker (overlays reply view) */}
-      <AttachmentPicker />
     </Box>
   );
 }

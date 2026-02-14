@@ -1,18 +1,20 @@
-import React, { useCallback } from "react";
-import { Box, Text, ScrollView, Keybind, FocusScope } from "@nick-skriabin/glyph";
+import React, { useCallback, useMemo, useRef } from "react";
+import { Box, Text, Button, FocusScope, Select } from "@semos-labs/glyph";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
   folderSidebarOpenAtom,
-  selectedFolderIndexAtom,
   currentLabelAtom,
   labelCountsAtom,
+  accountsAtom,
+  accountFilterAtom,
+  focusAtom,
 } from "../state/atoms.ts";
 import {
   toggleFolderSidebarAtom,
-  moveFolderSelectionAtom,
-  selectFolderAtom,
+  changeLabelAtom,
 } from "../state/actions.ts";
-import { FOLDER_LABELS, getLabelDisplay } from "../domain/email.ts";
+import { ScopedKeybinds } from "../keybinds/useKeybinds.tsx";
+import { FOLDER_LABELS, getLabelDisplay, type FolderLabel } from "../domain/email.ts";
 import { icons } from "./icons.ts";
 
 const FOLDER_ICONS: Record<string, string> = {
@@ -27,65 +29,114 @@ const FOLDER_ICONS: Record<string, string> = {
 
 export function FolderSidebar() {
   const open = useAtomValue(folderSidebarOpenAtom);
-  const selectedIndex = useAtomValue(selectedFolderIndexAtom);
   const currentLabel = useAtomValue(currentLabelAtom);
   const counts = useAtomValue(labelCountsAtom);
+  const accounts = useAtomValue(accountsAtom);
+  const accountFilter = useAtomValue(accountFilterAtom);
+  const setAccountFilter = useSetAtom(accountFilterAtom);
   const toggle = useSetAtom(toggleFolderSidebarAtom);
-  const move = useSetAtom(moveFolderSelectionAtom);
-  const select = useSetAtom(selectFolderAtom);
+  const changeLabel = useSetAtom(changeLabelAtom);
+  const setFocus = useSetAtom(focusAtom);
+  const setOpen = useSetAtom(folderSidebarOpenAtom);
 
-  const moveDown = useCallback(() => move("down"), [move]);
-  const moveUp = useCallback(() => move("up"), [move]);
-  const handleSelect = useCallback(() => select(), [select]);
-  const handleToggle = useCallback(() => toggle(), [toggle]);
+  const buttonRefs = useRef<Array<{ focus: () => void } | null>>([]);
+  const focusedIndex = useRef(0);
+
+  const moveFocus = useCallback((dir: "up" | "down") => {
+    const next = dir === "down"
+      ? Math.min(focusedIndex.current + 1, FOLDER_LABELS.length - 1)
+      : Math.max(focusedIndex.current - 1, 0);
+    focusedIndex.current = next;
+    buttonRefs.current[next]?.focus();
+  }, []);
+
+  const handlers = useMemo(() => ({
+    nextFolder: () => moveFocus("down"),
+    prevFolder: () => moveFocus("up"),
+    closeSidebar: () => toggle(),
+  }), [moveFocus, toggle]);
+
+  const accountItems = useMemo(() => {
+    const items = [{ label: `${icons.inbox} All Inboxes`, value: "__all__" }];
+    for (const acc of accounts) {
+      items.push({ label: `${icons.people} ${acc.name}`, value: acc.email });
+    }
+    return items;
+  }, [accounts]);
+
+  const handleAccountChange = useCallback((value: string) => {
+    setAccountFilter(value === "__all__" ? null : value);
+  }, [setAccountFilter]);
+
+  const handleFolderSelect = useCallback((label: FolderLabel) => {
+    changeLabel(label);
+    setOpen(false);
+    setFocus("list");
+  }, [changeLabel, setOpen, setFocus]);
 
   if (!open) return null;
+
+  const hasMultipleAccounts = accounts.length > 1;
 
   return (
     <FocusScope trap>
       <Box style={{ width: 22, flexDirection: "column", height: "100%" }}>
-        <Keybind keypress="j" onPress={moveDown} />
-        <Keybind keypress="down" onPress={moveDown} />
-        <Keybind keypress="k" onPress={moveUp} />
-        <Keybind keypress="up" onPress={moveUp} />
-        <Keybind keypress="return" onPress={handleSelect} />
-        <Keybind keypress="space" onPress={handleSelect} />
-        <Keybind keypress="escape" onPress={handleToggle} />
-        <Keybind keypress="ctrl+f" onPress={handleToggle} />
+        <ScopedKeybinds scope="folders" handlers={handlers} />
 
         <Box style={{ paddingX: 1, borderBottomWidth: 1, borderStyle: "single", borderColor: "gray" }}>
           <Text style={{ bold: true }}>Folders</Text>
         </Box>
-        <ScrollView style={{ flexGrow: 1 }} focusable={false} disableKeyboard>
+
+        <Box style={{ flexDirection: "column", flexGrow: 1 }}>
           {FOLDER_LABELS.map((label, index) => {
-            const isSelected = index === selectedIndex;
             const isCurrent = label === currentLabel;
-            const count = counts[label];
+            const count = counts[label as keyof typeof counts];
             const unread = count?.unread || 0;
             const icon = FOLDER_ICONS[label] || icons.folder;
 
             return (
-              <Box
+              <Button
                 key={label}
+                ref={(el: any) => { buttonRefs.current[index] = el; }}
+                onPress={() => handleFolderSelect(label)}
                 style={{
                   flexDirection: "row",
                   paddingX: 1,
-                  bg: isSelected ? "white" : undefined,
-                }}
+                  border: "none",
+                } as any}
+                focusedStyle={{ bg: "white" } as any}
               >
-                <Text dim={!isSelected && !isCurrent}>{icon} </Text>
+                <Text dim={!isCurrent}>{icon} </Text>
                 <Text style={{ bold: isCurrent, flexGrow: 1 }}>
                   {getLabelDisplay(label)}
                 </Text>
                 {unread > 0 && (
                   <Text style={{ bold: true }}>{unread}</Text>
                 )}
-              </Box>
+              </Button>
             );
           })}
-        </ScrollView>
+        </Box>
+
+        {/* Account selector */}
+        {hasMultipleAccounts && (
+          <Box style={{ paddingX: 1, borderTopWidth: 1, borderStyle: "single", borderColor: "gray" }}>
+            <Select
+              items={accountItems}
+              value={accountFilter ?? "__all__"}
+              onChange={handleAccountChange}
+              style={{ width: 20, border: "none" } as any}
+              dropdownStyle={{ border: "none" } as any}
+              focusedStyle={{ bg: "blackBright" }}
+              highlightColor="cyan"
+              maxVisible={accounts.length + 1}
+              searchable={false}
+            />
+          </Box>
+        )}
+
         <Box style={{ paddingX: 1 }}>
-          <Text dim>j/k:nav ↵:open Esc:close</Text>
+          <Text dim>↑↓/jk:nav Tab ↵:open Esc:close</Text>
         </Box>
       </Box>
     </FocusScope>

@@ -1,5 +1,5 @@
-import React from "react";
-import { Box, Text, useApp, FocusScope, Input, Keybind } from "@nick-skriabin/glyph";
+import React, { useMemo } from "react";
+import { Box, Text, useApp, FocusScope, Input, Keybind, Select } from "@semos-labs/glyph";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
   selectedEmailAtom,
@@ -15,8 +15,14 @@ import {
   composeAttachmentIndexAtom,
   composeAttachmentModeAtom,
   attachmentPickerOpenAtom,
+  contactSuggestionsAtom,
+  contactSuggestionIndexAtom,
+  activeContactFieldAtom,
+  accountsAtom,
+  replyFromAccountAtom,
 } from "../state/atoms.ts";
 import {
+  autoSaveDraftAtom,
   closeReplyAtom,
   sendReplyAtom,
   updateReplyToAtom,
@@ -32,32 +38,30 @@ import {
   removeComposeAttachmentAtom,
   previewComposeAttachmentAtom,
   getFilename,
+  moveSuggestionAtom,
+  acceptSuggestionAtom,
+  setReplyAccountAtom,
 } from "../state/actions.ts";
+import { ScopedKeybinds } from "../keybinds/useKeybinds.tsx";
 import { icons } from "./icons.ts";
 import { formatFileSize } from "../utils/files.ts";
 
-// Component to handle attachment mode keybinds
-// Uses priority Keybinds so they fire BEFORE the focused Input component
+// Attachment management mode keybinds — uses priority so they fire before Input
 function AttachmentModeKeybinds() {
   const toggleMode = useSetAtom(toggleComposeAttachmentModeAtom);
   const moveAttachment = useSetAtom(moveComposeAttachmentAtom);
   const removeAttachment = useSetAtom(removeComposeAttachmentAtom);
   const previewAttachment = useSetAtom(previewComposeAttachmentAtom);
 
-  return (
-    <>
-      <Keybind keypress="j" onPress={() => moveAttachment("next")} priority />
-      <Keybind keypress="down" onPress={() => moveAttachment("next")} priority />
-      <Keybind keypress="k" onPress={() => moveAttachment("prev")} priority />
-      <Keybind keypress="up" onPress={() => moveAttachment("prev")} priority />
-      <Keybind keypress="d" onPress={() => removeAttachment()} priority />
-      <Keybind keypress="x" onPress={() => removeAttachment()} priority />
-      <Keybind keypress="backspace" onPress={() => removeAttachment()} priority />
-      <Keybind keypress="o" onPress={() => previewAttachment()} priority />
-      <Keybind keypress="return" onPress={() => previewAttachment()} priority />
-      <Keybind keypress="escape" onPress={() => toggleMode()} priority />
-    </>
-  );
+  const handlers = useMemo(() => ({
+    next: () => moveAttachment("next"),
+    prev: () => moveAttachment("prev"),
+    remove: () => removeAttachment(),
+    preview: () => previewAttachment(),
+    exit: () => toggleMode(),
+  }), [moveAttachment, removeAttachment, previewAttachment, toggleMode]);
+
+  return <ScopedKeybinds scope="composeAttachments" handlers={handlers} priority />;
 }
 
 // Attachment list component
@@ -119,6 +123,93 @@ function ComposeAttachments({ maxWidth }: { maxWidth: number }) {
   );
 }
 
+// Contact autocomplete dropdown
+function ContactSuggestions({ maxWidth }: { maxWidth: number }) {
+  const suggestions = useAtomValue(contactSuggestionsAtom);
+  const selectedIndex = useAtomValue(contactSuggestionIndexAtom);
+  const activeField = useAtomValue(activeContactFieldAtom);
+  const moveSuggestion = useSetAtom(moveSuggestionAtom);
+  const acceptSuggestion = useSetAtom(acceptSuggestionAtom);
+
+  if (suggestions.length === 0) return null;
+
+  return (
+    <Box style={{
+      flexDirection: "column",
+      paddingX: 1,
+      marginLeft: 10,
+      bg: "blackBright",
+      width: Math.min(maxWidth - 10, 55),
+    }}>
+      <Box style={{ flexDirection: "row", justifyContent: "space-between" }}>
+        <Text dim style={{ bold: true }}>
+          {icons.people} Suggestions ({activeField.toUpperCase()})
+        </Text>
+        <Text dim>Tab:accept ↑↓:nav Esc:dismiss</Text>
+      </Box>
+      {suggestions.map((contact, index) => {
+        const isSelected = index === selectedIndex;
+        const display = contact.name
+          ? `${contact.name} <${contact.email}>`
+          : contact.email;
+        return (
+          <Box key={contact.email} style={{ flexDirection: "row" }}>
+            <Text
+              style={{
+                bold: isSelected,
+                color: isSelected ? "cyan" : undefined,
+              }}
+            >
+              {isSelected ? "▸ " : "  "}{display}
+            </Text>
+          </Box>
+        );
+      })}
+      {/* Suggestion navigation keybinds — priority so they fire before Input */}
+      <Keybind keypress="tab" onPress={() => acceptSuggestion()} priority />
+      <Keybind keypress="ctrl+n" onPress={() => moveSuggestion("next")} priority />
+      <Keybind keypress="ctrl+p" onPress={() => moveSuggestion("prev")} priority />
+    </Box>
+  );
+}
+
+// Compose/reply keybinds — uses the registry, rendered with priority
+function ComposeKeybinds({
+  replyMode,
+  isInAttachmentMode,
+  isPickerOpen,
+  sendReply,
+  closeReply,
+  toggleFullscreen,
+  toggleCcBcc,
+  openPicker,
+  toggleAttachmentMode,
+}: {
+  replyMode: string;
+  isInAttachmentMode: boolean;
+  isPickerOpen: boolean;
+  sendReply: () => void;
+  closeReply: () => void;
+  toggleFullscreen: () => void;
+  toggleCcBcc: () => void;
+  openPicker: () => void;
+  toggleAttachmentMode: () => void;
+}) {
+  const scope = (replyMode === "compose" || replyMode === "forward") ? "compose" : "reply";
+
+  const handlers = useMemo(() => ({
+    send: () => sendReply(),
+    cancel: isPickerOpen ? undefined : () => (isInAttachmentMode ? toggleAttachmentMode() : closeReply()),
+    toggleFullscreen: () => toggleFullscreen(),
+    toggleCcBcc: () => toggleCcBcc(),
+    openAttachmentPicker: isPickerOpen ? undefined : () => openPicker(),
+    toggleAttachmentMode: isPickerOpen ? undefined : () => toggleAttachmentMode(),
+  }), [sendReply, closeReply, toggleFullscreen, toggleCcBcc, openPicker, toggleAttachmentMode,
+    isInAttachmentMode, isPickerOpen]);
+
+  return <ScopedKeybinds scope={scope} handlers={handlers} priority />;
+}
+
 export function ReplyView() {
   const { rows: terminalHeight, columns: terminalWidth } = useApp();
   const email = useAtomValue(selectedEmailAtom);
@@ -127,6 +218,26 @@ export function ReplyView() {
   const showCcBcc = useAtomValue(replyShowCcBccAtom);
   const attachments = useAtomValue(replyAttachmentsAtom);
   const isInAttachmentMode = useAtomValue(composeAttachmentModeAtom);
+  // Multi-account
+  const accounts = useAtomValue(accountsAtom);
+  const fromAccount = useAtomValue(replyFromAccountAtom);
+  const setReplyAccount = useSetAtom(setReplyAccountAtom);
+  const hasMultipleAccounts = accounts.length > 1;
+
+  const accountItems = React.useMemo(() =>
+    accounts.map((acc) => ({
+      label: `${acc.name} <${acc.email}>`,
+      value: acc.email,
+    })),
+    [accounts]
+  );
+
+  const selectedAccountEmail = fromAccount?.email ?? "";
+
+  const handleAccountChange = React.useCallback((email: string) => {
+    const idx = accounts.findIndex(a => a.email === email);
+    if (idx >= 0) setReplyAccount(idx);
+  }, [accounts, setReplyAccount]);
   // Field values
   const replyTo = useAtomValue(replyToAtom);
   const replyCc = useAtomValue(replyCcAtom);
@@ -143,15 +254,28 @@ export function ReplyView() {
 
   const closeReply = useSetAtom(closeReplyAtom);
   const sendReply = useSetAtom(sendReplyAtom);
+  const autoSave = useSetAtom(autoSaveDraftAtom);
+
+  // Auto-save draft every 5 seconds while composing
+  React.useEffect(() => {
+    if (!replyMode) return;
+    const timer = setInterval(() => autoSave(), 5000);
+    return () => clearInterval(timer);
+  }, [replyMode, autoSave]);
   const toggleFullscreen = useSetAtom(toggleReplyFullscreenAtom);
   const toggleCcBcc = useSetAtom(toggleReplyCcBccAtom);
   const openPicker = useSetAtom(openAttachmentPickerAtom);
   const toggleAttachmentMode = useSetAtom(toggleComposeAttachmentModeAtom);
   const isPickerOpen = useAtomValue(attachmentPickerOpenAtom);
 
-  if (!email || !replyMode) return null;
+  if (!replyMode) return null;
+  // For reply/replyAll/forward we need an email; for compose we don't
+  if (!email && (replyMode === "reply" || replyMode === "replyAll" || replyMode === "forward")) return null;
 
-  const isReplyAll = replyMode === "replyAll";
+  const modeLabel =
+    replyMode === "compose" ? "Compose" :
+      replyMode === "forward" ? "Forward" :
+        replyMode === "replyAll" ? "Reply All" : "Reply";
 
   // Compact mode dimensions (bottom-right popup like Gmail)
   const compactWidth = Math.min(70, terminalWidth - 4);
@@ -169,10 +293,11 @@ export function ReplyView() {
   const top = isFullscreen ? 1 : terminalHeight - compactHeight - 1;
   const left = isFullscreen ? 1 : terminalWidth - compactWidth - 1;
 
-  // Calculate text area height (account for CC/BCC fields when shown)
+  // Calculate text area height (account for CC/BCC fields and From line when shown)
   const ccBccLines = showCcBcc ? 2 : 0;
+  const fromLine = fromAccount ? 1 : 0;
   const attachmentLines = Math.max(1, attachments.length + 1); // Header + items
-  const headerLines = 3 + ccBccLines; // Title + To + (Cc + Bcc) + Subject
+  const headerLines = 3 + ccBccLines + fromLine; // Title + From + To + (Cc + Bcc) + Subject
   const footerLines = 1;
   const textAreaHeight = Math.max(3, height - headerLines - footerLines - attachmentLines - 6);
   const inputWidth = width - 14; // Account for labels and padding
@@ -201,7 +326,7 @@ export function ReplyView() {
           bg: "cyan",
         }}>
           <Text style={{ bold: true }}>
-            {icons.reply} {isReplyAll ? "Reply All" : "Reply"}
+            {icons.reply} {modeLabel}
           </Text>
           <Box style={{ flexDirection: "row", gap: 1 }}>
             <Text dim>
@@ -213,6 +338,29 @@ export function ReplyView() {
 
         {/* Editable fields */}
         <Box style={{ flexDirection: "column", paddingX: 1, paddingTop: 1 }}>
+          {/* From account selector */}
+          {fromAccount && (
+            <Box style={{ flexDirection: "row", alignItems: "center" }}>
+              <Text dim style={{ width: 10 }}>From: </Text>
+              {hasMultipleAccounts ? (
+                <Select
+                  items={accountItems}
+                  value={selectedAccountEmail}
+                  onChange={handleAccountChange}
+                  placeholder="Select account"
+                  style={{ width: inputWidth, border: "none" } as any}
+                  dropdownStyle={{ border: "none" } as any}
+                  focusedStyle={{ bg: "blackBright" }}
+                  highlightColor="cyan"
+                  maxVisible={5}
+                  searchable={false}
+                />
+              ) : (
+                <Text>{fromAccount.name} {"<"}{fromAccount.email}{">"}</Text>
+              )}
+            </Box>
+          )}
+
           {/* To field with Cc/Bcc toggle */}
           <Box style={{ flexDirection: "row", alignItems: "center" }}>
             <Text dim style={{ width: 10 }}>To: </Text>
@@ -259,6 +407,9 @@ export function ReplyView() {
               />
             </Box>
           )}
+
+          {/* Contact autocomplete suggestions */}
+          <ContactSuggestions maxWidth={width - 4} />
 
           {/* Subject field */}
           <Box style={{ flexDirection: "row", alignItems: "center" }}>
@@ -321,15 +472,20 @@ export function ReplyView() {
           </Text>
         </Box>
 
-        {/* Priority keybinds that work even when Input is focused */}
-        <Keybind keypress="ctrl+return" onPress={() => sendReply()} priority />
-        <Keybind keypress="escape" onPress={() => isInAttachmentMode ? toggleAttachmentMode() : closeReply()} priority disabled={isPickerOpen} />
-        <Keybind keypress="ctrl+f" onPress={() => toggleFullscreen()} priority />
-        <Keybind keypress="ctrl+b" onPress={() => toggleCcBcc()} priority />
-        <Keybind keypress="ctrl+a" onPress={() => openPicker()} priority disabled={isPickerOpen} />
-        <Keybind keypress="ctrl+g" onPress={() => toggleAttachmentMode()} priority disabled={isPickerOpen} />
+        {/* Compose/reply keybinds — priority so they fire before Input */}
+        <ComposeKeybinds
+          replyMode={replyMode!}
+          isInAttachmentMode={isInAttachmentMode}
+          isPickerOpen={isPickerOpen}
+          sendReply={sendReply}
+          closeReply={closeReply}
+          toggleFullscreen={toggleFullscreen}
+          toggleCcBcc={toggleCcBcc}
+          openPicker={openPicker}
+          toggleAttachmentMode={toggleAttachmentMode}
+        />
 
-        {/* Attachment mode keybinds */}
+        {/* Attachment management sub-mode */}
         {isInAttachmentMode && <AttachmentModeKeybinds />}
       </Box>
     </FocusScope>

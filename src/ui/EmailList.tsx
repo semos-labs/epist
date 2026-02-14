@@ -1,15 +1,21 @@
 import React, { useMemo, useRef, useCallback } from "react";
-import { Box, Text, Keybind, useApp } from "@nick-skriabin/glyph";
+import { Box, Text, useApp } from "@semos-labs/glyph";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
-  filteredEmailsAtom,
-  selectedEmailIdAtom,
+  filteredThreadsAtom,
+  selectedThreadIdAtom,
+  selectedThreadIdsAtom,
+  bulkModeAtom,
   selectedIndexAtom,
   focusAtom,
   currentLabelAtom,
   unreadCountAtom,
   totalCountAtom,
   listScrollOffsetAtom,
+  hasOverlayAtom,
+  folderSidebarOpenAtom,
+  hasMoreEmailsAtom,
+  isSyncingAtom,
 } from "../state/atoms.ts";
 import {
   moveSelectionAtom,
@@ -25,74 +31,86 @@ import {
   replyEmailAtom,
   replyAllEmailAtom,
   forwardEmailAtom,
+  composeEmailAtom,
+  openMoveToFolderAtom,
+  undoAtom,
+  toggleThreadSelectionAtom,
+  clearBulkSelectionAtom,
+  selectAllThreadsAtom,
+  bulkArchiveAtom,
+  bulkDeleteAtom,
+  bulkMarkReadAtom,
+  bulkToggleStarAtom,
 } from "../state/actions.ts";
+import { ScopedKeybinds } from "../keybinds/useKeybinds.tsx";
 import { formatEmailDate } from "../domain/time.ts";
-import { formatEmailAddress, isUnread, isStarred, hasAttachments, type Email } from "../domain/email.ts";
+import { formatEmailAddress, isUnread, isStarred, hasAttachments, type Email, type Thread } from "../domain/email.ts";
 import { icons } from "./icons.ts";
 
-interface EmailItemProps {
-  email: Email;
+interface ThreadItemProps {
+  thread: Thread;
   isSelected: boolean;
   isFocused: boolean;
   isLast: boolean;
+  isBulkSelected: boolean;
 }
 
-function EmailItem({ email, isSelected, isFocused, isLast }: EmailItemProps) {
-  const unread = isUnread(email);
-  const fromName = formatEmailAddress(email.from);
-  const date = formatEmailDate(email.date);
+function ThreadItem({ thread, isSelected, isFocused, isLast, isBulkSelected }: ThreadItemProps) {
+  const { latest, count, hasUnread, subject } = thread;
+  const fromName = formatEmailAddress(latest.from);
+  const date = formatEmailDate(latest.date);
+  const hasAnyAttachments = thread.messages.some(m => hasAttachments(m));
+  const hasAnyStar = thread.messages.some(m => isStarred(m));
   
-  const isActive = isSelected && isFocused;  // full highlight: list focused + selected
-  const isDimSelected = isSelected && !isFocused;  // dimmed highlight: selected but list not focused
+  const isActive = isSelected && isFocused;
+  const isDimSelected = isSelected && !isFocused;
 
   return (
     <Box style={{ flexDirection: "column" }}>
-      {/* Email content box */}
       <Box style={{ 
         flexDirection: "column", 
         bg: isActive ? "white" : isDimSelected ? "blackBright" : undefined,
       }}>
-        {/* Line 1: Subject */}
+        {/* Line 1: Subject + thread count */}
         <Box style={{ flexDirection: "row" }}>
-          {/* Selection indicator */}
-          <Text style={{ color: isActive ? "black" : undefined }}>
-            {isSelected ? `${icons.selected} ` : "  "}
+          <Text style={{ color: isActive ? "black" : isBulkSelected ? "cyan" : undefined }}>
+            {isBulkSelected ? "● " : isSelected ? `${icons.selected} ` : "  "}
           </Text>
           
-          {/* Subject */}
           <Text 
             style={{ 
-              color: isActive ? "black" : (unread ? "white" : undefined),
+              color: isActive ? "black" : (hasUnread ? "white" : undefined),
+              bold: hasUnread,
               flexGrow: 1, 
               flexShrink: 1 
             }}
             wrap="truncate"
           >
-            {email.subject}
+            {subject}
           </Text>
           
-          {/* Attachment indicator (right side) */}
-          {hasAttachments(email) && (
+          {/* Thread count badge */}
+          {count > 1 && (
+            <Text style={{ color: isActive ? "black" : undefined, dim: !isActive }}> ({count})</Text>
+          )}
+          
+          {hasAnyAttachments && (
             <Text style={{ color: isActive ? "black" : undefined, dim: !isActive }}> {icons.attachment}</Text>
           )}
           
-          {/* Star indicator (right side) */}
-          {isStarred(email) && (
+          {hasAnyStar && (
             <Text style={{ color: isActive ? "black" : "yellow" }}> {icons.star}</Text>
           )}
           
-          {/* New badge for unread emails */}
-          {unread && (
+          {hasUnread && (
             <Text style={{ color: isActive ? "black" : "cyan" }}>{icons.new}</Text>
           )}
         </Box>
         
-        {/* Line 2: Sender, attachments, date (always dimmed unless selected) */}
+        {/* Line 2: Sender + date */}
         <Box style={{ flexDirection: "row" }}>
-          {/* Indent to align with subject */}
           <Text style={{ color: isActive ? "black" : undefined }}>  </Text>
           
-          {/* Sender */}
           <Text 
             style={{ 
               dim: !isActive, 
@@ -105,20 +123,19 @@ function EmailItem({ email, isSelected, isFocused, isLast }: EmailItemProps) {
             {fromName}
           </Text>
           
-        {/* Date */}
           <Text style={{ dim: !isActive, color: isActive ? "black" : undefined }}>
             {date}
           </Text>
         </Box>
       </Box>
       
-      {/* Empty line separator (outside the email box) */}
       {!isLast && <Text> </Text>}
     </Box>
   );
 }
 
 function ListKeybinds() {
+  const bulkMode = useAtomValue(bulkModeAtom);
   const moveSelection = useSetAtom(moveSelectionAtom);
   const toggleFocus = useSetAtom(toggleFocusAtom);
   const toggleStar = useSetAtom(toggleStarAtom);
@@ -132,75 +149,75 @@ function ListKeybinds() {
   const reply = useSetAtom(replyEmailAtom);
   const replyAll = useSetAtom(replyAllEmailAtom);
   const forward = useSetAtom(forwardEmailAtom);
+  const compose = useSetAtom(composeEmailAtom);
+  const moveToFolder = useSetAtom(openMoveToFolderAtom);
+  const undo = useSetAtom(undoAtom);
+  const toggleSelection = useSetAtom(toggleThreadSelectionAtom);
+  const clearBulk = useSetAtom(clearBulkSelectionAtom);
+  const selectAll = useSetAtom(selectAllThreadsAtom);
+  const bArchive = useSetAtom(bulkArchiveAtom);
+  const bDelete = useSetAtom(bulkDeleteAtom);
+  const bMarkRead = useSetAtom(bulkMarkReadAtom);
+  const bStar = useSetAtom(bulkToggleStarAtom);
 
   const lastKeyRef = useRef<string>("");
   const lastKeyTimeRef = useRef<number>(0);
 
-  const moveDown = useCallback(() => moveSelection("down"), [moveSelection]);
-  const moveUp = useCallback(() => moveSelection("up"), [moveSelection]);
-  const moveLast = useCallback(() => moveSelection("last"), [moveSelection]);
-  const handleG = useCallback(() => {
-    const now = Date.now();
-    if (lastKeyRef.current === "g" && now - lastKeyTimeRef.current < 500) {
-      moveSelection("first");
-      lastKeyRef.current = "";
-      return;
-    }
-    lastKeyRef.current = "g";
-    lastKeyTimeRef.current = now;
-  }, [moveSelection]);
-  const handleOpen = useCallback(() => openEmail(), [openEmail]);
-  const handleToggleFocus = useCallback(() => toggleFocus(), [toggleFocus]);
-  const handleToggleStar = useCallback(() => toggleStar(), [toggleStar]);
-  const handleArchive = useCallback(() => archive(), [archive]);
-  const handleDelete = useCallback(() => deleteEmail(), [deleteEmail]);
-  const handleMarkUnread = useCallback(() => markUnread(), [markUnread]);
-  const handleReply = useCallback(() => reply(), [reply]);
-  const handleReplyAll = useCallback(() => replyAll(), [replyAll]);
-  const handleForward = useCallback(() => forward(), [forward]);
-  const handleOpenCommand = useCallback(() => openCommand(), [openCommand]);
-  const handleOpenSearch = useCallback(() => openSearch(), [openSearch]);
-  const handleOpenHelp = useCallback(() => openHelp(), [openHelp]);
+  const handlers = useMemo(() => ({
+    // Navigation
+    nextEmail: () => moveSelection("down"),
+    prevEmail: () => moveSelection("up"),
+    lastEmail: () => moveSelection("last"),
+    firstEmail: () => {
+      const now = Date.now();
+      if (lastKeyRef.current === "g" && now - lastKeyTimeRef.current < 500) {
+        moveSelection("first");
+        lastKeyRef.current = "";
+        return;
+      }
+      lastKeyRef.current = "g";
+      lastKeyTimeRef.current = now;
+    },
 
-  return (
-    <>
-      {/* Navigation */}
-      <Keybind keypress="j" onPress={moveDown} />
-      <Keybind keypress="down" onPress={moveDown} />
-      <Keybind keypress="k" onPress={moveUp} />
-      <Keybind keypress="up" onPress={moveUp} />
-      <Keybind keypress="g" onPress={handleG} />
-      <Keybind keypress="shift+g" onPress={moveLast} />
+    // Open / focus
+    openEmail: () => openEmail(),
+    focusView: () => openEmail(),
+    toggleFocus: () => toggleFocus(),
 
-      {/* Open / focus */}
-      <Keybind keypress="return" onPress={handleOpen} />
-      <Keybind keypress="space" onPress={handleOpen} />
-      <Keybind keypress="l" onPress={handleOpen} />
-      <Keybind keypress="right" onPress={handleOpen} />
-      <Keybind keypress="tab" onPress={handleToggleFocus} />
-      <Keybind keypress="`" onPress={handleToggleFocus} />
+    // Email actions (bulk-aware)
+    toggleStar: () => bulkMode ? bStar() : toggleStar(),
+    archive: () => bulkMode ? bArchive() : archive(),
+    delete: () => bulkMode ? bDelete() : deleteEmail(),
+    markUnread: () => bulkMode ? bMarkRead() : markUnread(),
+    reply: () => reply(),
+    replyAll: () => replyAll(),
+    forward: () => forward(),
+    moveToFolder: () => moveToFolder(),
+    undo: () => undo(),
 
-      {/* Email actions */}
-      <Keybind keypress="s" onPress={handleToggleStar} />
-      <Keybind keypress="e" onPress={handleArchive} />
-      <Keybind keypress="shift+d" onPress={handleDelete} />
-      <Keybind keypress="u" onPress={handleMarkUnread} />
-      <Keybind keypress="r" onPress={handleReply} />
-      <Keybind keypress="shift+r" onPress={handleReplyAll} />
-      <Keybind keypress="f" onPress={handleForward} />
+    // Bulk selection
+    toggleSelect: () => toggleSelection(),
+    selectAll: () => selectAll(),
+    clearBulk: bulkMode ? () => clearBulk() : undefined,
 
-      {/* Global */}
-      <Keybind keypress=":" onPress={handleOpenCommand} />
-      <Keybind keypress="/" onPress={handleOpenSearch} />
-      <Keybind keypress="?" onPress={handleOpenHelp} />
-    </>
-  );
+    // Global-like
+    openCommand: () => openCommand(),
+    openSearch: () => openSearch(),
+    openHelp: () => openHelp(),
+    compose: () => compose(),
+  }), [bulkMode, moveSelection, openEmail, toggleFocus, toggleStar, archive, deleteEmail, markUnread,
+       reply, replyAll, forward, compose, moveToFolder, undo, toggleSelection, selectAll, clearBulk,
+       openCommand, openSearch, openHelp, bStar, bArchive, bDelete, bMarkRead]);
+
+  return <ScopedKeybinds scope="list" handlers={handlers} />;
 }
 
 export function EmailList() {
   const { rows: terminalHeight, columns: terminalWidth } = useApp();
-  const emails = useAtomValue(filteredEmailsAtom);
-  const selectedId = useAtomValue(selectedEmailIdAtom);
+  const threads = useAtomValue(filteredThreadsAtom);
+  const selectedThreadId = useAtomValue(selectedThreadIdAtom);
+  const bulkSelectedIds = useAtomValue(selectedThreadIdsAtom);
+  const bulkMode = useAtomValue(bulkModeAtom);
   const selectedIndex = useAtomValue(selectedIndexAtom);
   const focus = useAtomValue(focusAtom);
   const currentLabel = useAtomValue(currentLabelAtom);
@@ -208,18 +225,17 @@ export function EmailList() {
   const totalCount = useAtomValue(totalCountAtom);
   const scrollOffset = useAtomValue(listScrollOffsetAtom);
   const setScrollOffset = useSetAtom(listScrollOffsetAtom);
+  const hasOverlay = useAtomValue(hasOverlayAtom);
+  const folderSidebarOpen = useAtomValue(folderSidebarOpenAtom);
+  const hasMore = useAtomValue(hasMoreEmailsAtom);
+  const isSyncing = useAtomValue(isSyncingAtom);
   
   const isFocused = focus === "list";
   
-  // Calculate list dimensions
-  // Sidebar takes about 40% of width, min 30, max 60
   const listWidth = Math.min(60, Math.max(30, Math.floor(terminalWidth * 0.4)));
+  const availableLines = terminalHeight - 4;
+  const visibleCount = Math.floor((availableLines + 1) / 3);
   
-  // Each email takes 3 lines (separator + subject + meta), first one has no separator
-  const availableLines = terminalHeight - 4; // Header + count + status bar + padding
-  const visibleCount = Math.floor((availableLines + 1) / 3); // +1 because first email has no separator
-  
-  // Auto-scroll to keep selection visible
   React.useEffect(() => {
     if (selectedIndex >= 0) {
       if (selectedIndex < scrollOffset) {
@@ -230,8 +246,7 @@ export function EmailList() {
     }
   }, [selectedIndex, scrollOffset, visibleCount, setScrollOffset]);
   
-  // Visible emails slice
-  const visibleEmails = emails.slice(scrollOffset, scrollOffset + visibleCount);
+  const visibleThreads = threads.slice(scrollOffset, scrollOffset + visibleCount);
 
   return (
     <Box
@@ -239,48 +254,52 @@ export function EmailList() {
         width: listWidth,
         height: "100%",
         flexDirection: "column",
-        clip: true, // Clip all content to fixed width
+        clip: true,
       }}
     >
       {/* Count indicator */}
       <Box style={{ flexDirection: "row", justifyContent: "flex-end", paddingX: 1 }}>
         <Text dim>
-          {unreadCount > 0 ? `${unreadCount} unread · ` : ""}{totalCount} total
+          {bulkMode ? `${bulkSelectedIds.size} selected · ` : ""}
+          {unreadCount > 0 ? `${unreadCount} unread · ` : ""}{totalCount} threads
         </Text>
       </Box>
       
-      {/* Email list */}
+      {/* Thread list */}
       <Box style={{ flexGrow: 1, flexDirection: "column", paddingX: 1 }}>
-        {visibleEmails.length === 0 ? (
+        {visibleThreads.length === 0 ? (
           <Box style={{ paddingTop: 1 }}>
             <Text dim>No emails</Text>
           </Box>
         ) : (
-          visibleEmails.map((email, index) => (
-            <EmailItem
-              key={email.id}
-              email={email}
-              isSelected={email.id === selectedId}
+          visibleThreads.map((thread, index) => (
+            <ThreadItem
+              key={thread.id}
+              thread={thread}
+              isSelected={thread.id === selectedThreadId}
               isFocused={isFocused}
-              isLast={index === visibleEmails.length - 1}
+              isLast={index === visibleThreads.length - 1}
+              isBulkSelected={bulkSelectedIds.has(thread.id)}
             />
           ))
         )}
       </Box>
       
       {/* Scroll indicator */}
-      {emails.length > visibleCount && (
+      {threads.length > visibleCount && (
         <Box style={{ paddingX: 1 }}>
           <Text dim>
             {scrollOffset > 0 ? icons.arrowUp : " "}
-            {scrollOffset + visibleCount < emails.length ? icons.arrowDown : " "}
-            {" "}{scrollOffset + 1}-{Math.min(scrollOffset + visibleCount, emails.length)}/{emails.length}
+            {scrollOffset + visibleCount < threads.length ? icons.arrowDown : " "}
+            {" "}{scrollOffset + 1}-{Math.min(scrollOffset + visibleCount, threads.length)}/{threads.length}
+            {hasMore ? " ↓more" : ""}
+            {isSyncing ? " ⟳" : ""}
           </Text>
         </Box>
       )}
       
-      {/* Keybinds handler */}
-      {isFocused && <ListKeybinds />}
+      {/* Keybinds handler — disabled when overlays are open */}
+      {isFocused && !hasOverlay && !folderSidebarOpen && <ListKeybinds />}
     </Box>
   );
 }

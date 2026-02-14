@@ -1,7 +1,7 @@
 /**
  * Logger module with file persistence
  * 
- * Logs are stored in ~/.local/share/aion/logs/ with daily rotation
+ * Logs are stored in ~/.local/share/epist/logs/ with daily rotation
  * (respects XDG Base Directory Specification)
  */
 
@@ -34,7 +34,7 @@ let minLogLevel: LogLevel = "debug";
  */
 function getLogFilePath(): string {
   const date = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
-  return join(LOGS_DIR, `aion-${date}.log`);
+  return join(LOGS_DIR, `epist-${date}.log`);
 }
 
 /**
@@ -98,7 +98,7 @@ async function writeLog(entry: LogEntry): Promise<void> {
  * Create a logger instance for a specific category
  * 
  * IMPORTANT: Never output to console - it corrupts the TUI!
- * All logs go to ~/.local/share/aion/logs/ only.
+   * All logs go to ~/.local/share/epist/logs/ only.
  */
 export function createLogger(category: string) {
   const log = (level: LogLevel, message: string, data?: unknown) => {
@@ -176,7 +176,7 @@ export async function cleanupOldLogs(keepDays = 7): Promise<number> {
     let deletedCount = 0;
     
     // Read directory using Bun's glob
-    const glob = new Bun.Glob("aion-*.log");
+    const glob = new Bun.Glob("epist-*.log");
     
     for await (const filename of glob.scan(LOGS_DIR)) {
       const filePath = join(LOGS_DIR, filename);

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { Box, Text, Input, Portal, FocusScope } from "@nick-skriabin/glyph";
+import { Box, Text, Input, Portal, FocusScope } from "@semos-labs/glyph";
 import { useAtomValue, useSetAtom, useAtom } from "jotai";
 import {
   focusAtom,
@@ -10,6 +10,9 @@ import {
   messageVisibleAtom,
   searchQueryAtom,
   currentLabelAtom,
+  isLoggedInAtom,
+  isAuthLoadingAtom,
+  googleAccountsAtom,
 } from "../state/atoms.ts";
 import {
   executeCommandAtom,
@@ -172,7 +175,7 @@ function SearchInput() {
         <Input
           key="search-input"
           value={query}
-          placeholder="Search emails..."
+          placeholder="Search... (from: to: has:attachment is:unread after: before:)"
           onChange={updateQuery}
           onKeyPress={handleKeyPress}
           autoFocus
@@ -215,6 +218,29 @@ function StatusInfo() {
       </Text>
     </Box>
   );
+}
+
+// Auth indicator
+function AuthIndicator() {
+  const loggedIn = useAtomValue(isLoggedInAtom);
+  const loading = useAtomValue(isAuthLoadingAtom);
+  const accounts = useAtomValue(googleAccountsAtom);
+
+  if (loading) {
+    return <Text style={{ color: "yellow" }}>⟳ signing in…</Text>;
+  }
+
+  if (loggedIn && accounts.length > 0) {
+    const primary = accounts[0]!;
+    const label = primary.name || primary.email;
+    return (
+      <Text style={{ color: "green" }}>
+        ● {label}{accounts.length > 1 ? ` +${accounts.length - 1}` : ""}
+      </Text>
+    );
+  }
+
+  return <Text dim>○ offline</Text>;
 }
 
 // Clock component
@@ -275,8 +301,9 @@ export function StatusBar() {
           )}
         </Box>
 
-        {/* Right side: Hints + Clock */}
-        <Box style={{ flexDirection: "row", gap: 2 }}>
+        {/* Right side: Auth + Hints + Clock */}
+        <Box style={{ flexDirection: "row", gap: 2, alignItems: "center" }}>
+          <AuthIndicator />
           {!isCommandMode && !isSearchMode && (
             <Text dim>:cmd /search ?help</Text>
           )}

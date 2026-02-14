@@ -7,11 +7,15 @@
   "private": true,
   "scripts": {
     "start": "bun run src/index.tsx",
-    "dev": "bun --watch run src/index.tsx"
+    "dev": "bun --watch run src/index.tsx",
+    "release": "bun scripts/release.ts",
+    "release:minor": "bun scripts/release.ts --minor",
+    "release:major": "bun scripts/release.ts --major"
   },
   "dependencies": {
-    "@nick-skriabin/glyph": "^0.1.67",
+    "@semos-labs/glyph": "^0.1.83",
     "chrono-node": "^2.8.0",
+    "drizzle-orm": "^0.45.1",
     "jotai": "^2.12.3",
     "lunr": "^2.3.9",
     "luxon": "^3.6.1",
@@ -19,6 +23,7 @@
     "marked-terminal": "^7.3.0",
     "react": "^19.0.0",
     "react-error-boundary": "^6.1.0",
+    "smol-toml": "^1.6.0",
     "turndown": "^7.2.2",
     "zod": "^3.24.2"
   },
@@ -27,7 +32,8 @@
     "@types/lunr": "^2.3.7",
     "@types/luxon": "^3.6.2",
     "@types/react": "^19.0.0",
-    "@types/turndown": "^5.0.6"
+    "@types/turndown": "^5.0.6",
+    "drizzle-kit": "^0.31.9"
   },
   "peerDependencies": {
     "typescript": "^5"

@@ -1,6 +1,6 @@
 # ✉ Epist
 
-A terminal-based email client built with [Glyph](https://github.com/nick-skriabin/glyph) - beautiful, fast, and fully keyboard-driven.
+A terminal-based email client built with [Glyph](https://github.com/semos-labs/glyph) - beautiful, fast, and fully keyboard-driven.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -89,7 +89,7 @@ Type `:` to open the command bar, then enter commands:
 
 ## Tech Stack
 
-- **UI Framework**: [Glyph](https://github.com/nick-skriabin/glyph) - React-based terminal UI
+- **UI Framework**: [Glyph](https://github.com/semos-labs/glyph) - React-based terminal UI
 - **State Management**: [Jotai](https://jotai.org/) - Primitive atomic state
 - **Runtime**: [Bun](https://bun.sh/) - Fast JavaScript runtime
 - **Language**: TypeScript

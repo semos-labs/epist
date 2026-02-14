@@ -1,5 +1,5 @@
 import React from "react";
-import { Box, Text, Portal, Input, FocusScope } from "@nick-skriabin/glyph";
+import { Box, Text, Portal, Input, FocusScope } from "@semos-labs/glyph";
 import { useAtomValue, useSetAtom } from "jotai";
 import { basename } from "path";
 import {
