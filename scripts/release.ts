@@ -12,9 +12,9 @@ import { $ } from "bun";
 
 // Parse arguments
 const args = process.argv.slice(2);
-const bumpType = args.includes("--major") ? "major" 
-              : args.includes("--minor") ? "minor" 
-              : "patch";
+const bumpType = args.includes("--major") ? "major"
+  : args.includes("--minor") ? "minor"
+    : "patch";
 
 async function main() {
   console.log("🚀 Starting release process...\n");
@@ -22,7 +22,7 @@ async function main() {
   // 1. Check if work tree is clean
   console.log("📋 Checking work tree...");
   const status = await $`git status --porcelain`.text();
-  
+
   if (status.trim() !== "") {
     console.error("❌ Work tree is not clean. Please commit or stash your changes first.");
     console.error("\nUncommitted changes:");
@@ -51,7 +51,7 @@ async function main() {
   }
 
   let [, major, minor, patch] = versionMatch.map(Number);
-  
+
   switch (bumpType) {
     case "major":
       major!++;
@@ -70,19 +70,34 @@ async function main() {
   const newVersion = `v${major}.${minor}.${patch}`;
   console.log(`📦 Bumping ${bumpType} version: ${latestTag} → ${newVersion}\n`);
 
-  // 4. Update package.json version
-  console.log("📝 Updating package.json...");
-  const packageJsonPath = "./packages/glyph/package.json";
-  const packageJson = await Bun.file(packageJsonPath).json();
-  packageJson.version = `${major}.${minor}.${patch}`;
-  await Bun.write(packageJsonPath, JSON.stringify(packageJson, null, 2) + "\n");
-  console.log(`   Updated version to ${major}.${minor}.${patch}\n`);
+  // 4. Update package.json versions (glyph + create-glyph)
+  console.log("📝 Updating package versions...");
+  const versionStr = `${major}.${minor}.${patch}`;
 
-  // 5. Commit the version bump
+  const packagePaths = [
+    "./package.json",
+  ];
+
+  for (const pkgPath of packagePaths) {
+    const pkg = await Bun.file(pkgPath).json();
+    pkg.version = versionStr;
+    await Bun.write(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
+    console.log(`   ${pkg.name} → ${versionStr}`);
+  }
+  console.log();
+
+  // 5. Commit the version bump (skip if nothing changed)
   console.log("💾 Committing version bump...");
-  await $`git add ${packageJsonPath}`;
-  await $`git commit -m "chore: bump version to ${newVersion}"`;
-  console.log("✅ Committed\n");
+  for (const pkgPath of packagePaths) {
+    await $`git add ${pkgPath}`;
+  }
+  const diff = await $`git diff --cached --name-only`.text();
+  if (diff.trim()) {
+    await $`git commit -m "chore: bump version to ${newVersion}"`;
+    console.log("✅ Committed\n");
+  } else {
+    console.log("⏭️  Versions already up to date, skipping commit\n");
+  }
 
   // 6. Create and push tag
   console.log(`🏷️  Creating tag ${newVersion}...`);
