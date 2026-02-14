@@ -75,8 +75,23 @@ function extractImages(html: string): { html: string; images: ExtractedImage[] }
  *   - 2+ rows with consistent structure
  */
 function isDataTable(attrs: string, inner: string): boolean {
-  // role="presentation" → definitely layout
+  // ── Strongest signals first ──────────────────────────────────────────
+
+  // role="presentation" → definitely layout (overrides everything)
   if (/role=["']presentation["']/i.test(attrs)) return false;
+
+  // cellpadding / cellspacing present → layout (data tables rarely set these)
+  if (/cellpadding|cellspacing/i.test(attrs)) return false;
+
+  // <caption> → definitely data
+  if (/<caption[\s>]/i.test(inner)) return true;
+
+  // <thead> or <th> elements → very strong data signal
+  // (overrides width heuristic — GitHub uses width:100% on real data tables)
+  const hasTh = /<th[\s>]/i.test(inner);
+  if (hasTh) return true;
+
+  // ── Width heuristics (only for tables without <th>) ──────────────────
 
   // Full-width or typical email-width → layout (attribute or inline style)
   if (/width=["']?\s*100%/i.test(attrs)) return false;
@@ -88,14 +103,7 @@ function isDataTable(attrs: string, inner: string): boolean {
     if (w >= 500 && w <= 800) return false;
   }
 
-  // cellpadding / cellspacing present → layout (data tables rarely set these)
-  if (/cellpadding|cellspacing/i.test(attrs)) return false;
-
-  // <caption> → strong data signal
-  if (/<caption[\s>]/i.test(inner)) return true;
-
-  // Has <th> elements → strong data signal
-  const hasTh = /<th[\s>]/i.test(inner);
+  // ── Column / row heuristics ──────────────────────────────────────────
 
   // Count columns in first row
   const firstRowMatch = inner.match(/<tr[^>]*>([\s\S]*?)<\/tr>/i);
@@ -107,10 +115,7 @@ function isDataTable(attrs: string, inner: string): boolean {
   if (colCount <= 1) return false;
 
   // 2 columns without headers → layout (label + value, sidebar + main)
-  if (colCount === 2 && !hasTh) return false;
-
-  // Headers + 2+ columns → data
-  if (hasTh && colCount >= 2) return true;
+  if (colCount === 2) return false;
 
   // 3+ columns — check if cells contain *structural* block elements
   // (table, div, section, article, etc. indicate layout; but img, p, br, b
@@ -434,12 +439,65 @@ function createTurndownService(): TurndownService {
     replacement: () => "",
   });
 
-  // === Data table handling (layout tables are already unwrapped to <div>s) ===
-  // These rules only fire for genuine data tables that survived preprocessing.
+  // === Table handling ===
+  // Data tables (those with <th> headers) → proper markdown table syntax.
+  // Layout tables that survived preprocessing (e.g. wrapping a data table) → plain blocks.
+
+  // Helper: check if a <table> node has its OWN <th> elements
+  // (not from nested tables). Walks only direct children.
+  const tableHasOwnTh = (tableNode: any): boolean => {
+    for (const child of tableNode.childNodes || []) {
+      const tag = (child.nodeName || "").toUpperCase();
+      if (tag === "THEAD") {
+        // <thead> implies headers — check for <th> inside
+        for (const row of child.childNodes || []) {
+          if ((row.nodeName || "").toUpperCase() === "TR") {
+            for (const cell of row.childNodes || []) {
+              if ((cell.nodeName || "").toUpperCase() === "TH") return true;
+            }
+          }
+        }
+      }
+      if (tag === "TR") {
+        for (const cell of child.childNodes || []) {
+          if ((cell.nodeName || "").toUpperCase() === "TH") return true;
+        }
+      }
+      if (tag === "TBODY" || tag === "TFOOT") {
+        for (const row of child.childNodes || []) {
+          if ((row.nodeName || "").toUpperCase() === "TR") {
+            for (const cell of row.childNodes || []) {
+              if ((cell.nodeName || "").toUpperCase() === "TH") return true;
+            }
+          }
+        }
+      }
+    }
+    return false;
+  };
+
+  // Helper: walk up from a node to find its closest <table> ancestor
+  // and check whether that table is a "data table" (has its own <th> elements).
+  const isInDataTable = (node: any): boolean => {
+    let parent = node.parentNode;
+    while (parent) {
+      if (parent.nodeName === "TABLE") {
+        return tableHasOwnTh(parent);
+      }
+      parent = parent.parentNode;
+    }
+    return false;
+  };
 
   td.addRule("tableCell", {
     filter: ["th", "td"],
-    replacement: (content) => {
+    replacement: (content, node: any) => {
+      if (!isInDataTable(node)) {
+        // Layout table cell → plain block
+        const trimmed = content.trim();
+        return trimmed ? `\n${trimmed}\n` : "";
+      }
+      // Data table cell → markdown table cell
       const trimmed = content.trim().replace(/\n/g, " ");
       return ` ${trimmed} |`;
     },
@@ -447,7 +505,13 @@ function createTurndownService(): TurndownService {
 
   td.addRule("tableRow", {
     filter: "tr",
-    replacement: (content) => `|${content}\n`,
+    replacement: (content, node: any) => {
+      if (!isInDataTable(node)) {
+        // Layout table row → just content
+        return content;
+      }
+      return `|${content}\n`;
+    },
   });
 
   td.addRule("tableHead", {
@@ -466,7 +530,14 @@ function createTurndownService(): TurndownService {
 
   td.addRule("table", {
     filter: "table",
-    replacement: (content) => `\n\n${content}\n`,
+    replacement: (content, node: any) => {
+      if (!tableHasOwnTh(node)) {
+        // Layout table → pass through content as block
+        if (!content.replace(/\n/g, "").trim()) return "";
+        return `\n${content}\n`;
+      }
+      return `\n\n${content}\n`;
+    },
   });
 
   // Strip <style> and <script> tags
