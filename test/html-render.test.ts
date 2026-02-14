@@ -1,11 +1,11 @@
 import { test, expect } from "bun:test";
-import { renderHtmlEmail, sanitizeEmailHtml, stripAnsi } from "../src/utils/htmlRenderer.ts";
+import { renderHtmlEmail, preprocessEmailDom, stripAnsi } from "../src/utils/htmlRenderer.ts";
 import { join } from "path";
 
 const html = await Bun.file(join(import.meta.dir, "example.html")).text();
 
-test("sanitizeEmailHtml removes preheader padding and junk", () => {
-  const sanitized = sanitizeEmailHtml(html);
+test("preprocessEmailDom removes preheader padding and junk", () => {
+  const { html: sanitized } = preprocessEmailDom(html);
 
   // Should NOT contain the invisible preheader padding (U+034F combining grapheme joiner)
   expect(sanitized).not.toContain("͏");
@@ -13,16 +13,13 @@ test("sanitizeEmailHtml removes preheader padding and junk", () => {
   // Should NOT contain soft hyphens (U+00AD)
   expect(sanitized).not.toContain("\u00AD");
 
-  // Should NOT contain the orphaned </span> from the preheader div
-  // (The opening <div> without matching <span> + long padding text)
-
   // Should still contain the real content
   expect(sanitized).toContain("Here's what you'll find in this issue:");
   expect(sanitized).toContain("Five Flops, Then $23K MRR");
 });
 
-test("sanitizeEmailHtml removes the raw-markdown preview div", () => {
-  const sanitized = sanitizeEmailHtml(html);
+test("preprocessEmailDom removes the raw-markdown preview div", () => {
+  const { html: sanitized } = preprocessEmailDom(html);
 
   // The email has a duplicate: first a raw inline text version with markdown-like **bold**,
   // then the proper HTML version. The raw text block should be stripped or at least
@@ -30,7 +27,7 @@ test("sanitizeEmailHtml removes the raw-markdown preview div", () => {
   const count = (sanitized.match(/Here's what you'll find in this issue/g) || []).length;
 
   // Ideally 1, but we need to look at the rendered output to confirm
-  console.log(`"Here's what you'll find" appears ${count} time(s) in sanitized HTML`);
+  console.log(`"Here's what you'll find" appears ${count} time(s) in preprocessed HTML`);
 });
 
 test("renderHtmlEmail produces clean markdown output", () => {
@@ -64,31 +61,26 @@ test("renderHtmlEmail produces clean markdown output", () => {
   expect(fullText).not.toContain("͏");
 
   // Text lines must NOT be swallowed by image placeholder lines
-  // (regression: marked-terminal reflowed image placeholders onto the same line
-  // as text, and the UI replaced the entire line with an Image component)
   expect(fullText).toContain("Here's what you'll find in this issue:");
 
   // Image placeholders should be on their own dedicated lines
   for (let i = 0; i < plainLines.length; i++) {
     const line = plainLines[i]!.trim();
     if (line.match(/^⬚ \[IMG:\d+\]/)) {
-      // This line starts with an image placeholder — verify no other
-      // image placeholders are on the same line (they were split)
       const matches = line.match(/⬚ \[IMG:\d+\]/g);
       expect(matches?.length).toBe(1);
     }
   }
 });
 
-test("markdown intermediate output (for debugging)", async () => {
-  // Show just the sanitize → turndown step, before marked-terminal
+test("DOM preprocessing intermediate output (for debugging)", async () => {
   const TurndownService = (await import("turndown")).default;
 
-  const sanitized = sanitizeEmailHtml(html);
+  const { html: preprocessed } = preprocessEmailDom(html);
 
-  console.log("=== SANITIZED HTML (first 3000 chars) ===");
-  console.log(sanitized.slice(0, 3000));
-  console.log("=== END SANITIZED ===\n");
+  console.log("=== PREPROCESSED HTML (first 3000 chars) ===");
+  console.log(preprocessed.slice(0, 3000));
+  console.log("=== END PREPROCESSED ===\n");
 
   // Use a basic turndown to see the raw markdown
   const td = new TurndownService({
@@ -97,7 +89,7 @@ test("markdown intermediate output (for debugging)", async () => {
     bulletListMarker: "-",
   });
 
-  const markdown = td.turndown(sanitized);
+  const markdown = td.turndown(preprocessed);
 
   console.log("=== RAW MARKDOWN (first 3000 chars) ===");
   console.log(markdown.slice(0, 3000));
@@ -105,15 +97,12 @@ test("markdown intermediate output (for debugging)", async () => {
 });
 
 test("marked-terminal output (for debugging)", async () => {
-  // Full pipeline broken into steps so we can see what marked-terminal does
   const TurndownService = (await import("turndown")).default;
   const { Marked } = await import("marked");
   const { markedTerminal } = await import("marked-terminal");
 
-  // Step 1: sanitize
-  const sanitized = sanitizeEmailHtml(html);
+  const { html: preprocessed } = preprocessEmailDom(html);
 
-  // Step 2: turndown (same config as htmlRenderer.ts)
   const td = new TurndownService({
     headingStyle: "atx",
     codeBlockStyle: "fenced",
@@ -151,13 +140,12 @@ test("marked-terminal output (for debugging)", async () => {
     replacement: () => "",
   });
 
-  const markdown = td.turndown(sanitized);
+  const markdown = td.turndown(preprocessed);
 
   console.log("=== MARKDOWN INPUT (first 2000 chars) ===");
   console.log(markdown.slice(0, 2000));
   console.log("=== END MARKDOWN INPUT ===\n");
 
-  // Step 3: marked-terminal (same config as htmlRenderer.ts)
   const instance = new Marked();
   instance.use(
     markedTerminal({
@@ -173,18 +161,15 @@ test("marked-terminal output (for debugging)", async () => {
 
   const terminalOutput = instance.parse(markdown) as string;
 
-  // Show raw terminal output (with ANSI codes)
   console.log("=== MARKED-TERMINAL OUTPUT (raw, first 3000 chars) ===");
   console.log(terminalOutput.slice(0, 3000));
   console.log("=== END RAW ===\n");
 
-  // Show stripped version
   const stripped = stripAnsi(terminalOutput);
   console.log("=== MARKED-TERMINAL OUTPUT (stripped, first 3000 chars) ===");
   console.log(stripped.slice(0, 3000));
   console.log("=== END STRIPPED ===");
 
-  // Basic sanity: it should still contain real content
   expect(stripped).toContain("Five Flops");
   expect(stripped).toContain("Augment Code");
 });
@@ -213,7 +198,6 @@ test("example2: renderHtmlEmail — GitHub Actions email", () => {
   expect(fullText).toContain("GitHub, Inc.");
 
   // Should NOT have raw markdown table pipes leaking through
-  // (the Status/Job/Annotations table should be unwrapped, not rendered as markdown table)
   expect(fullText).not.toMatch(/\|\s*Status\s*\|\s*Job\s*\|\s*Annotations\s*\|/);
 
   // Should NOT have excessive blank lines
