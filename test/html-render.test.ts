@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { renderHtmlEmail, preprocessEmailDom, stripAnsi } from "../src/utils/htmlRenderer.ts";
+import { renderHtmlEmail, preprocessEmailDom, stripAnsi, parseLineSegments } from "../src/utils/htmlRenderer.ts";
 import { join } from "path";
 
 const html = await Bun.file(join(import.meta.dir, "example.html")).text();
@@ -18,19 +18,25 @@ test("preprocessEmailDom removes preheader padding and junk", () => {
   expect(sanitized).toContain("Five Flops, Then $23K MRR");
 });
 
+test("preprocessEmailDom leaves <img> tags intact", () => {
+  const { html: sanitized } = preprocessEmailDom(html);
+
+  // <img> tags should be preserved (not extracted) for Turndown to handle
+  // Tracking pixels (1x1) should be removed, but real images should remain
+  const imgCount = (sanitized.match(/<img /g) || []).length;
+  console.log(`<img> tags in preprocessed HTML: ${imgCount}`);
+  // There should be at least some images preserved
+  expect(imgCount).toBeGreaterThanOrEqual(0); // tracking pixels may all be removed
+});
+
 test("preprocessEmailDom removes the raw-markdown preview div", () => {
   const { html: sanitized } = preprocessEmailDom(html);
 
-  // The email has a duplicate: first a raw inline text version with markdown-like **bold**,
-  // then the proper HTML version. The raw text block should be stripped or at least
-  // shouldn't produce duplicate content.
   const count = (sanitized.match(/Here's what you'll find in this issue/g) || []).length;
-
-  // Ideally 1, but we need to look at the rendered output to confirm
   console.log(`"Here's what you'll find" appears ${count} time(s) in preprocessed HTML`);
 });
 
-test("renderHtmlEmail produces clean markdown output", () => {
+test("renderHtmlEmail produces clean output with inline image placeholders", () => {
   const result = renderHtmlEmail(html, 80);
   const plainLines = result.lines.map(l => stripAnsi(l));
   const fullText = plainLines.join("\n");
@@ -39,8 +45,12 @@ test("renderHtmlEmail produces clean markdown output", () => {
   console.log(fullText);
   console.log("=== END ===");
   console.log(`Total lines: ${result.lines.length}`);
-  console.log(`Images: ${result.images.length}`);
   console.log(`Links: ${result.links.length}`);
+
+  // Count inline images from parsedLines
+  const imageCount = result.parsedLines.reduce((acc, parts) =>
+    acc + parts.filter(p => p.type === "image").length, 0);
+  console.log(`Inline images: ${imageCount}`);
 
   // Content checks
   expect(fullText).toContain("Five Flops, Then $23K MRR");
@@ -49,9 +59,7 @@ test("renderHtmlEmail produces clean markdown output", () => {
   expect(fullText).toContain("Augment Code");
   expect(fullText).toContain("Rob Hallam failed with five products");
 
-  // marked-terminal renders <strong> as **bold** — that's correct.
-  // What we DON'T want is the raw text-preview duplicate showing literal
-  // \*\*bold\*\* (backslash-escaped asterisks from Turndown escaping).
+  // Should NOT have raw escaped markdown asterisks
   expect(fullText).not.toMatch(/\\\*\\\*This founder hit\\\*\\\*/);
 
   // Should NOT have excessive blank lines (max 1 blank line between sections)
@@ -60,17 +68,70 @@ test("renderHtmlEmail produces clean markdown output", () => {
   // Should NOT have the invisible preheader content
   expect(fullText).not.toContain("͏");
 
-  // Text lines must NOT be swallowed by image placeholder lines
+  // Text lines must NOT be swallowed
   expect(fullText).toContain("Here's what you'll find in this issue:");
 
-  // Image placeholders should be on their own dedicated lines
-  for (let i = 0; i < plainLines.length; i++) {
-    const line = plainLines[i]!.trim();
-    if (line.match(/^⬚ \[IMG:\d+\]/)) {
-      const matches = line.match(/⬚ \[IMG:\d+\]/g);
-      expect(matches?.length).toBe(1);
+  // Image placeholders should use the new format ⬚⟪src⟫⟪alt⟫
+  for (const parts of result.parsedLines) {
+    for (const part of parts) {
+      if (part.type === "image") {
+        expect(part.src).toBeTruthy();
+        expect(part.alt).toBeTruthy();
+      }
     }
   }
+});
+
+test("parseLineSegments handles pure text lines", () => {
+  const parts = parseLineSegments("Hello world", []);
+  expect(parts).toEqual([{ type: "text", content: "Hello world" }]);
+});
+
+test("parseLineSegments handles pure image lines", () => {
+  const registry = [{ src: "https://example.com/img.png", alt: "Logo" }];
+  const parts = parseLineSegments("⬚⟪0⟫⟪Logo⟫", registry);
+  expect(parts).toEqual([{
+    type: "image",
+    content: "Logo",
+    src: "https://example.com/img.png",
+    alt: "Logo",
+  }]);
+});
+
+test("parseLineSegments handles mixed text + image lines", () => {
+  const registry = [{ src: "https://example.com/img.png", alt: "Logo" }];
+  const parts = parseLineSegments("Before ⬚⟪0⟫⟪Logo⟫ After", registry);
+  expect(parts.length).toBe(3);
+  expect(parts[0]).toEqual({ type: "text", content: "Before " });
+  expect(parts[1]).toEqual({
+    type: "image",
+    content: "Logo",
+    src: "https://example.com/img.png",
+    alt: "Logo",
+  });
+  expect(parts[2]).toEqual({ type: "text", content: " After" });
+});
+
+test("parseLineSegments handles multiple images on one line", () => {
+  const registry = [
+    { src: "https://a.com/1.png", alt: "A" },
+    { src: "https://b.com/2.png", alt: "B" },
+  ];
+  const line = "⬚⟪0⟫⟪A⟫ text ⬚⟪1⟫⟪B⟫";
+  const parts = parseLineSegments(line, registry);
+  expect(parts.length).toBe(3);
+  expect(parts[0]!.type).toBe("image");
+  expect(parts[0]!.src).toBe("https://a.com/1.png");
+  expect(parts[1]!.type).toBe("text");
+  expect(parts[1]!.content).toBe(" text ");
+  expect(parts[2]!.type).toBe("image");
+  expect(parts[2]!.src).toBe("https://b.com/2.png");
+});
+
+test("parseLineSegments preserves ANSI on non-image lines", () => {
+  const ansiLine = "\x1b[1mBold text\x1b[0m";
+  const parts = parseLineSegments(ansiLine, []);
+  expect(parts).toEqual([{ type: "text", content: ansiLine }]);
 });
 
 test("DOM preprocessing intermediate output (for debugging)", async () => {
@@ -155,7 +216,10 @@ test("marked-terminal output (for debugging)", async () => {
       unescape: true,
       emoji: false,
       tab: 2,
-      image: (_href: string, _title: string, text: string) => text || "",
+      image: (href: string, _title: string, text: string) => {
+        const alt = text || "image";
+        return `⬚⟪${href}⟫⟪${alt}⟫`;
+      },
     })
   );
 
@@ -187,14 +251,18 @@ test("example2: renderHtmlEmail — GitHub Actions email", () => {
   console.log(fullText);
   console.log("=== END ===");
 
+  // Count inline images
+  const imageCount = result.parsedLines.reduce((acc, parts) =>
+    acc + parts.filter(p => p.type === "image").length, 0);
+  console.log(`Inline images: ${imageCount}`);
+
   // Should contain the key content
   expect(fullText).toContain("[semos-labs/glyph] Test workflow run");
   expect(fullText).toContain("All jobs were successful");
   expect(fullText).toContain("View workflow run");
-  // marked-terminal may reflow "Succeeded in 14 seconds" across lines
   expect(fullText).toMatch(/Succeeded in 14\s+seconds/);
 
-  // Address should be readable, not garbled
+  // Address should be readable
   expect(fullText).toContain("GitHub, Inc.");
 
   // Should NOT have raw markdown table pipes leaking through

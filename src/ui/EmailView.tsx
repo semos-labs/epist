@@ -62,7 +62,7 @@ import { ScopedKeybinds } from "../keybinds/useKeybinds.tsx";
 import { formatFullDate } from "../domain/time.ts";
 import { formatEmailAddress, formatEmailAddresses, type CalendarEvent, type Email, type Thread } from "../domain/email.ts";
 import { icons } from "./icons.ts";
-import { renderHtmlEmail, renderPlainTextEmail, type ExtractedImage, type ExtractedLink, type RenderResult } from "../utils/htmlRenderer.ts";
+import { renderHtmlEmail, renderPlainTextEmail, TABLE_CHARS_RE, type LinePart } from "../utils/htmlRenderer.ts";
 import { DateTime } from "luxon";
 import { openFile } from "../utils/files.ts";
 
@@ -89,7 +89,7 @@ const InlineLink = React.memo(function InlineLink({ href, isActive, disabled }: 
   );
 });
 
-function ViewKeybinds({ images, hasCalendarInvite }: { images?: ExtractedImage[]; hasCalendarInvite?: boolean }) {
+function ViewKeybinds({ hasCalendarInvite }: { hasCalendarInvite?: boolean }) {
   const attachmentsFocused = useAtomValue(attachmentsFocusedAtom);
   const imageNavMode = useAtomValue(imageNavModeAtom);
   const toggleFocus = useSetAtom(toggleFocusAtom);
@@ -151,7 +151,6 @@ function ViewKeybinds({ images, hasCalendarInvite }: { images?: ExtractedImage[]
   }), [moveImageFocus, scrollView, toggleImageNav]);
 
   // ── Normal view mode ──
-  const hasImages = images && images.length > 0;
   const viewHandlers = useMemo(() => ({
     // Scroll
     scrollDown: () => scrollView("down"),
@@ -188,7 +187,7 @@ function ViewKeybinds({ images, hasCalendarInvite }: { images?: ExtractedImage[]
     toggleDebugHtml: () => toggleDebugHtml(),
     copyHtmlToClipboard: () => copyHtmlToClipboard(),
     toggleAttachments: () => toggleAttachments(),
-    toggleImageNav: hasImages ? () => toggleImageNav() : undefined,
+    toggleImageNav: () => toggleImageNav(),
     nextMessage: () => moveFocusedMessage("next"),
     prevMessage: () => moveFocusedMessage("prev"),
     moveToFolder: () => moveToFolder(),
@@ -213,7 +212,7 @@ function ViewKeybinds({ images, hasCalendarInvite }: { images?: ExtractedImage[]
   }), [scrollView, setFocus, toggleFocus, toggleStar, archive, deleteEmail, markUnread,
     moveSelection, reply, replyAll, forward, compose, toggleHeaders, toggleDebugHtml, copyHtmlToClipboard, toggleAttachments,
     toggleImageNav, moveToFolder, undo, inlineReply, rsvp, openCommand, openSearch,
-    openHelp, hasImages, hasCalendarInvite, emailLinks, activeLinkIdx, moveLinkFocus, openActiveLink,
+    openHelp, hasCalendarInvite, emailLinks, activeLinkIdx, moveLinkFocus, openActiveLink,
     moveFocusedMessage]);
 
   // Determine which keybind scope to render based on active sub-mode
@@ -221,7 +220,7 @@ function ViewKeybinds({ images, hasCalendarInvite }: { images?: ExtractedImage[]
     return <ScopedKeybinds scope="viewAttachments" handlers={attachmentHandlers} />;
   }
 
-  if (imageNavMode && hasImages) {
+  if (imageNavMode) {
     return <ScopedKeybinds scope="viewImageNav" handlers={imageNavHandlers} />;
   }
 
@@ -557,10 +556,13 @@ function CalendarInviteSection({ event, inviteFocused, onRsvp }: {
 // ===== Line System =====
 
 interface ExpandedLine {
-  type: "text" | "image-marker";
-  content: string;
-  originalIndex: number; // index in the original lines[]
-  imageId?: string;
+  /** Inline segments: text and image parts */
+  parts: LinePart[];
+  /** The raw rendered line (with ANSI codes) */
+  rawContent: string;
+  /** Index in the original lines[] */
+  originalIndex: number;
+  /** If this line contains a focusable link */
   linkHref?: string;
 }
 
@@ -602,21 +604,27 @@ function groupQuotedSegments(lines: ExpandedLine[]): Segment[] {
   let i = 0;
   while (i < lines.length) {
     const line = lines[i]!;
-    if (line.type === "text" && isQuotedLine(line.content)) {
-      // Collect consecutive quoted lines
+    // A line is "quoted" only if it has no images and its raw content is a quote
+    const hasImages = line.parts.some(p => p.type === "image");
+    if (!hasImages && isQuotedLine(line.rawContent)) {
       const start = i;
       const quotedItems: ExpandedLine[] = [];
-      while (i < lines.length && lines[i]!.type === "text" && isQuotedLine(lines[i]!.content)) {
-        quotedItems.push(lines[i]!);
+      while (i < lines.length) {
+        const l = lines[i]!;
+        const lHasImages = l.parts.some(p => p.type === "image");
+        if (lHasImages || !isQuotedLine(l.rawContent)) break;
+        quotedItems.push(l);
         i++;
       }
       segments.push({ kind: "quote", items: quotedItems, startIndex: start, lineCount: quotedItems.length });
     } else {
-      // Regular line — group consecutive non-quoted
       const start = i;
       const items: ExpandedLine[] = [];
-      while (i < lines.length && !(lines[i]!.type === "text" && isQuotedLine(lines[i]!.content))) {
-        items.push(lines[i]!);
+      while (i < lines.length) {
+        const l = lines[i]!;
+        const lHasImages = l.parts.some(p => p.type === "image");
+        if (!lHasImages && isQuotedLine(l.rawContent)) break;
+        items.push(l);
         i++;
       }
       segments.push({ kind: "lines", items, startIndex: start });
@@ -626,7 +634,7 @@ function groupQuotedSegments(lines: ExpandedLine[]): Segment[] {
 }
 
 /** Collapsible quoted text block */
-function QuotedBlock({ items, quoteIndex, images }: { items: ExpandedLine[]; quoteIndex: number; images: ExtractedImage[] }) {
+function QuotedBlock({ items, quoteIndex }: { items: ExpandedLine[]; quoteIndex: number }) {
   const [expanded, setExpanded] = React.useState(false);
   const toggle = useCallback(() => setExpanded(e => !e), []);
 
@@ -647,7 +655,7 @@ function QuotedBlock({ items, quoteIndex, images }: { items: ExpandedLine[]; quo
       </Box>
       {items.map((item, idx) => (
         <Box key={`q${quoteIndex}-${idx}`} style={{ flexDirection: "row" }}>
-          <Text dim>{item.content || " "}</Text>
+          <Text dim>{item.parts[0]?.content || item.rawContent || " "}</Text>
         </Box>
       ))}
     </>
@@ -673,19 +681,13 @@ function MessageContent({ email, linkIndexOffset, activeLinkIndex, viewFocused }
 
   const expandedLines: ExpandedLine[] = useMemo(() => {
     if (!renderResult) return [];
-    const { lines, imageLineMap, linkLineMap, links } = renderResult;
-    const result: ExpandedLine[] = [];
-    for (let i = 0; i < lines.length; i++) {
-      const imageId = imageLineMap.get(i);
-      const linkId = linkLineMap.get(i);
-      if (imageId) {
-        result.push({ type: "image-marker", content: lines[i] || " ", originalIndex: i, imageId });
-      } else {
-        const link = linkId ? links.find(l => l.id === linkId) : undefined;
-        result.push({ type: "text", content: lines[i] || "", originalIndex: i, linkHref: link?.href });
-      }
-    }
-    return result;
+    const { lines, parsedLines, linkLineMap, links } = renderResult;
+    return lines.map((line, i) => ({
+      parts: parsedLines[i] || [{ type: "text" as const, content: line }],
+      rawContent: line,
+      originalIndex: i,
+      linkHref: linkLineMap.has(i) ? links.find(l => l.id === linkLineMap.get(i))?.href : undefined,
+    }));
   }, [renderResult]);
 
   // Group lines into quoted/non-quoted segments
@@ -693,7 +695,6 @@ function MessageContent({ email, linkIndexOffset, activeLinkIndex, viewFocused }
 
   if (!renderResult) return null;
 
-  const { images } = renderResult;
   let quoteIdx = 0;
   let linkCounter = 0;
 
@@ -702,7 +703,6 @@ function MessageContent({ email, linkIndexOffset, activeLinkIndex, viewFocused }
       {segments.map((seg, segIdx) => {
         if (seg.kind === "quote") {
           const qi = quoteIdx++;
-          // Count links inside the quote for proper offset tracking
           for (const item of seg.items) {
             if (item.linkHref) linkCounter++;
           }
@@ -711,39 +711,77 @@ function MessageContent({ email, linkIndexOffset, activeLinkIndex, viewFocused }
               key={`quote-${segIdx}`}
               items={seg.items}
               quoteIndex={qi}
-              images={images}
             />
           );
         }
 
         // Regular lines
         return seg.items.map((item, index) => {
-          const key = `${seg.startIndex}-${item.type}-${index}`;
-          if (item.type === "image-marker" && item.imageId) {
-            const img = images.find(i => i.id === item.imageId);
-            if (img?.src) {
-              const label = img.alt || img.title || "image";
+          const key = `${seg.startIndex}-${index}`;
+          const hasImages = item.parts.some(p => p.type === "image");
+
+          // Line with inline image(s) — render each segment
+          if (hasImages) {
+            // If images appear inside a box-drawing table line, render them
+            // inline (row direction) so the table structure is preserved.
+            const isTableLine = item.parts.some(
+              p => p.type === "text" && TABLE_CHARS_RE.test(p.content),
+            );
+
+            if (isTableLine) {
               return (
                 <Box key={key} style={{ flexDirection: "row" }}>
-                  <Image
-                    src={img.src}
-                    placeholder={`${label}`}
-                    placeholderStyle={{ paddingX: 1 }}
-                    focusedStyle={{ bg: "blackBright" }}
-                    style={{ border: "none" }}
-                    autoLoad={false}
-                    autoSize
-                    maxHeight={20}
-                    disabled={!viewFocused}
-                  />
+                  {item.parts.map((part, pi) => {
+                    if (part.type === "image" && part.src) {
+                      return (
+                        <Image
+                          key={pi}
+                          src={part.src}
+                          placeholder={part.alt || "image"}
+                          style={{ border: "none" }}
+                          autoLoad={false}
+                          autoSize
+                          maxHeight={2}
+                          disabled={!viewFocused}
+                        />
+                      );
+                    }
+                    return <Text key={pi}>{part.content}</Text>;
+                  })}
                 </Box>
               );
             }
+
+            return (
+              <Box key={key} style={{ flexDirection: "column" }}>
+                {item.parts.map((part, pi) => {
+                  if (part.type === "image" && part.src) {
+                    return (
+                      <Image
+                        key={pi}
+                        src={part.src}
+                        placeholder={part.alt || "image"}
+                        placeholderStyle={{ paddingX: 1 }}
+                        focusedStyle={{ bg: "blackBright" }}
+                        style={{ border: "none" }}
+                        autoLoad={false}
+                        autoSize
+                        maxHeight={20}
+                        disabled={!viewFocused}
+                      />
+                    );
+                  }
+                  return <Text key={pi}>{part.content}</Text>;
+                })}
+              </Box>
+            );
           }
+
+          // Line with a link
           if (item.linkHref) {
             const globalIdx = linkIndexOffset + linkCounter;
             linkCounter++;
-            const [before, after] = splitAroundUrl(item.content, item.linkHref);
+            const [before, after] = splitAroundUrl(item.rawContent, item.linkHref);
             return (
               <Box key={key} style={{ flexDirection: "row" }}>
                 {before && <Text>{before}</Text>}
@@ -752,9 +790,12 @@ function MessageContent({ email, linkIndexOffset, activeLinkIndex, viewFocused }
               </Box>
             );
           }
+
+          // Plain text line
+          const textContent = item.parts[0]?.content || item.rawContent || " ";
           return (
             <Box key={key} style={{ flexDirection: "row" }}>
-              <Text>{item.content || " "}</Text>
+              <Text>{textContent}</Text>
             </Box>
           );
         });
@@ -764,7 +805,7 @@ function MessageContent({ email, linkIndexOffset, activeLinkIndex, viewFocused }
 }
 
 
-function EmailBody({ availableHeight, viewFocused, onRenderResult }: { availableHeight: number; viewFocused: boolean; onRenderResult?: (result: RenderResult) => void }) {
+function EmailBody({ availableHeight, viewFocused }: { availableHeight: number; viewFocused: boolean }) {
   const thread = useAtomValue(selectedThreadAtom);
   const email = useAtomValue(selectedEmailAtom);
   const scrollOffset = useAtomValue(viewScrollOffsetAtom);
@@ -920,7 +961,6 @@ export function EmailView() {
   const focus = useAtomValue(focusAtom);
   const hasOverlay = useAtomValue(hasOverlayAtom);
   const folderSidebarOpen = useAtomValue(folderSidebarOpenAtom);
-  const [currentImages, setCurrentImages] = React.useState<ExtractedImage[]>([]);
 
   const isFocused = focus === "view";
 
@@ -928,10 +968,6 @@ export function EmailView() {
   const subjectLine = 1;
   const chrome = subjectLine + 2; // +2 for outer padding/border
   const availableHeight = Math.max(5, terminalHeight - chrome);
-
-  const handleRenderResult = React.useCallback((result: RenderResult) => {
-    setCurrentImages(result.images);
-  }, []);
 
   return (
     <Box
@@ -946,7 +982,7 @@ export function EmailView() {
         {thread ? (
           <>
             <SubjectBar />
-            <EmailBody availableHeight={availableHeight} viewFocused={isFocused} onRenderResult={handleRenderResult} />
+            <EmailBody availableHeight={availableHeight} viewFocused={isFocused} />
           </>
         ) : (
           <EmptyState />
@@ -956,7 +992,7 @@ export function EmailView() {
       {/* Quick inline reply box */}
       <InlineReply width={terminalWidth} />
 
-      {isFocused && !hasOverlay && !folderSidebarOpen && <ViewKeybinds images={currentImages} hasCalendarInvite={!!email?.calendarEvent} />}
+      {isFocused && !hasOverlay && !folderSidebarOpen && <ViewKeybinds hasCalendarInvite={!!email?.calendarEvent} />}
     </Box>
   );
 }

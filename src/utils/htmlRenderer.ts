@@ -3,15 +3,20 @@ import { markedTerminal } from "marked-terminal";
 import TurndownService from "turndown";
 import * as cheerio from "cheerio";
 
-// ===== Image Extraction =====
+// ===== Line Parts (for inline rendering) =====
 
-export interface ExtractedImage {
-  id: string;
-  src: string;
-  alt: string;
-  title?: string;
-  /** Placeholder text used in the rendered body */
-  placeholder: string;
+/**
+ * A segment within a rendered line.
+ * Lines can contain a mix of text and inline images.
+ */
+export interface LinePart {
+  type: "text" | "image";
+  /** For text: the rendered text (may include ANSI codes). For image: the alt text. */
+  content: string;
+  /** For image: the source URL */
+  src?: string;
+  /** For image: alt text */
+  alt?: string;
 }
 
 // ===== Link Detection =====
@@ -22,6 +27,20 @@ export interface ExtractedLink {
   /** Line index in the rendered output */
   lineIndex: number;
 }
+
+// ===== Image placeholder format =====
+//
+// In marked-terminal's image handler we output:  ⬚⟪index⟫⟪alt⟫
+// where `index` is a number referencing an image registry array.
+// This keeps placeholders compact (important for table cells!) while
+// preserving the src URL for the UI to render actual <Image> components.
+
+interface ImageRegistryEntry {
+  src: string;
+  alt: string;
+}
+
+const IMG_PLACEHOLDER_RE = /⬚⟪(\d+)⟫⟪([^⟫]*)⟫/g;
 
 // ===== DOM-based HTML Preprocessing =====
 
@@ -122,24 +141,19 @@ function unwrapLayoutTable($: cheerio.CheerioAPI, table: cheerio.Cheerio<any>) {
 /**
  * Pre-process email HTML using a real DOM.
  *
- * This replaces the old regex-based sanitizeEmailHtml(), extractImages(),
- * and unwrapLayoutTables() with proper DOM operations via cheerio.
+ * This sanitizes HTML, removes tracking pixels, unwraps layout tables,
+ * and strips junk attributes — but leaves <img> tags intact for Turndown
+ * to convert into standard markdown images `![alt](src)`.
  *
- * Returns cleaned HTML and extracted images.
+ * Returns cleaned HTML ready for Turndown.
  */
-export function preprocessEmailDom(html: string): {
-  html: string;
-  images: ExtractedImage[];
-} {
+export function preprocessEmailDom(html: string): { html: string } {
   const $ = cheerio.load(html, { xmlMode: false } as any);
-  const images: ExtractedImage[] = [];
-  let imageCounter = 0;
 
   // ── 1. Remove junk blocks ──────────────────────────────────────
   $("style, script, head, xml").remove();
   // Outlook paragraph wrappers
   $("*").filter((_, el) => /^o:/i.test((el as any).tagName || "")).remove();
-  // HTML comments are removed by cheerio's parser automatically
 
   // ── 2. Remove hidden / invisible elements ──────────────────────
   $("*").each((_, el) => {
@@ -172,35 +186,20 @@ export function preprocessEmailDom(html: string): {
     if (isTracker) $el.remove();
   });
 
-  // ── 4. Extract images → placeholders ───────────────────────────
-  $("img").each((_, el) => {
-    const $el = $(el);
-    const src = $el.attr("src") || "";
-    const alt = $el.attr("alt") || "image";
-    const title = $el.attr("title");
-    const id = `img-${++imageCounter}`;
-    const placeholder = `[IMG:${imageCounter}] ${alt}`;
-
-    images.push({ id, src, alt, title, placeholder });
-
-    $el.replaceWith(
-      `<span class="img-placeholder" data-img-id="${id}">⬚ ${placeholder}</span>`
-    );
-  });
+  // ── 4. <img> tags are left intact for Turndown ─────────────────
+  // Turndown will convert them to ![alt](src) markdown images.
+  // marked-terminal's image handler will output our parseable placeholder.
 
   // ── 5. Unwrap layout tables (inside-out) ───────────────────────
-  // Repeatedly find the innermost tables (those without nested tables)
-  // and unwrap the layout ones. Data tables are left intact.
   const MAX_ITERATIONS = 50;
   for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
     let changed = false;
 
-    // Find tables that don't contain nested tables (innermost first)
     $("table").each((_, el) => {
       const $table = $(el);
-      if ($table.find("table").length > 0) return; // has nested tables, skip for now
+      if ($table.find("table").length > 0) return;
 
-      if (isDataTableEl($, $table)) return; // genuine data table
+      if (isDataTableEl($, $table)) return;
 
       unwrapLayoutTable($, $table);
       changed = true;
@@ -209,47 +208,36 @@ export function preprocessEmailDom(html: string): {
     if (!changed) break;
   }
 
-  // Any remaining tables that are layout wrappers around data tables:
-  // Turndown rules will handle them (isInDataTable check).
-
-  // ── 6. Strip junk attributes ───────────────────────────────────
+  // ── 6. Strip junk attributes (keep src, alt, title, href) ─────
   const STRIP_ATTRS = ["style", "id", "dir", "align", "bgcolor", "role"];
   $("*").each((_, el) => {
     const $el = $(el);
     for (const attr of STRIP_ATTRS) {
       $el.removeAttr(attr);
     }
-    // Strip class (except our img-placeholder marker)
-    const cls = $el.attr("class") || "";
-    if (cls && cls !== "img-placeholder") {
-      $el.removeAttr("class");
-    }
-    // Remove data-* attributes (except our data-img-id)
+    // Strip class on all elements
+    $el.removeAttr("class");
+    // Remove data-* attributes
     const attribs = (el as any).attribs || {};
     for (const key of Object.keys(attribs)) {
-      if (key.startsWith("data-") && key !== "data-img-id") {
+      if (key.startsWith("data-")) {
         $el.removeAttr(key);
       }
     }
   });
 
   // ── 7. Clean up whitespace / text artefacts ────────────────────
-
-  // Remove <wbr> tags
   $("wbr").remove();
 
   // Unwrap all <span> tags (meaningless inline containers without attributes)
   $("span").each((_, el) => {
-    const $el = $(el);
-    // Preserve our image placeholders
-    if ($el.hasClass("img-placeholder")) return;
-    $el.replaceWith($el.contents());
+    $(el).replaceWith($(el).contents());
   });
 
-  // Remove empty <div>s (remnants of unwrapped layout tables)
+  // Remove empty <div>s (but keep ones that contain images)
   $("div").each((_, el) => {
     const $el = $(el);
-    if ($el.text().trim() === "" && $el.find("img, span.img-placeholder").length === 0) {
+    if ($el.text().trim() === "" && $el.find("img").length === 0) {
       $el.remove();
     }
   });
@@ -257,17 +245,14 @@ export function preprocessEmailDom(html: string): {
   // ── 8. Get the cleaned HTML ────────────────────────────────────
   let output = $("body").html() || $.html();
 
-  // Text-level cleanup (these are simpler as string ops)
-  // Zero-width / invisible Unicode characters
+  // Text-level cleanup
   output = output.replace(/[\u200B\u200C\u200D\uFEFF\u034F\u00AD]/g, "");
-  // &nbsp; / &#160; → regular space
   output = output.replace(/&nbsp;/gi, " ");
   output = output.replace(/&#160;/g, " ");
-  // Katakana middle dot
   output = output.replace(/&#12539;/g, " · ");
   output = output.replace(/\u30FB/g, " · ");
 
-  return { html: output, images };
+  return { html: output };
 }
 
 // ===== Turndown (HTML → Markdown) =====
@@ -315,10 +300,9 @@ function createTurndownService(): TurndownService {
     },
   });
 
-  // === Image placeholder handling ===
-
-  // Side-channel: images extracted from data table cells.
-  const pendingTableImages: string[] = [];
+  // === Table handling ===
+  // Data tables (with <th>) → markdown table syntax.
+  // Layout tables that survived preprocessing → plain blocks.
 
   // Helper: check if a <table> node has its OWN <th> elements.
   const tableHasOwnTh = (tableNode: any): boolean => {
@@ -363,30 +347,10 @@ function createTurndownService(): TurndownService {
     return false;
   };
 
-  td.addRule("img-placeholder", {
-    filter: (node: any) => {
-      return (
-        node.nodeName === "SPAN" &&
-        node.getAttribute?.("class") === "img-placeholder"
-      );
-    },
-    replacement: (_content, node) => {
-      const el = node as any;
-      const text = (el.textContent || "") as string;
-
-      // Inside a data table cell → extract to side-channel
-      if (isInDataTable(el)) {
-        pendingTableImages.push(text);
-        return "";
-      }
-
-      return `\n\n${text}\n\n`;
-    },
-  });
-
-  // === Table handling ===
-  // Data tables (with <th>) → markdown table syntax.
-  // Layout tables that survived preprocessing → plain blocks.
+  // === Images ===
+  // All images flow through Turndown's default: <img> → ![alt](src).
+  // marked-terminal's image handler then converts them to compact
+  // index-based placeholders ⬚⟪N⟫⟪alt⟫ that work even inside table cells.
 
   td.addRule("tableCell", {
     filter: ["th", "td"],
@@ -429,13 +393,7 @@ function createTurndownService(): TurndownService {
         if (!content.replace(/\n/g, "").trim()) return "";
         return `\n${content}\n`;
       }
-      // Emit extracted table images after the table
-      let suffix = "";
-      if (pendingTableImages.length > 0) {
-        suffix = "\n" + pendingTableImages.map(t => `\n${t}\n`).join("");
-        pendingTableImages.length = 0;
-      }
-      return `\n\n${content}\n${suffix}`;
+      return `\n\n${content}\n`;
     },
   });
 
@@ -458,7 +416,7 @@ function createTurndownService(): TurndownService {
   // Divs as block containers (from unwrapped layout tables).
   td.addRule("divBlock", {
     filter: (node: any) => {
-      return node.nodeName === "DIV" && !node.getAttribute?.("class")?.includes("img-placeholder");
+      return node.nodeName === "DIV";
     },
     replacement: (content) => {
       if (!content.replace(/\n/g, "").trim()) return "";
@@ -471,7 +429,7 @@ function createTurndownService(): TurndownService {
 
 // ===== Marked + marked-terminal (Markdown → Terminal) =====
 
-function createMarkedInstance(width: number = 80): Marked {
+function createMarkedInstance(width: number, imageRegistry: ImageRegistryEntry[]): Marked {
   const instance = new Marked();
 
   instance.use(
@@ -482,8 +440,14 @@ function createMarkedInstance(width: number = 80): Marked {
       unescape: true,
       emoji: false,
       tab: 2,
-      image: (_href: string, _title: string, text: string) => {
-        return text || "";
+      image: (href: string, _title: string, text: string) => {
+        // Store image in registry and output a compact index-based placeholder.
+        // This keeps placeholders short (critical for table cells!) while
+        // preserving the src URL for the UI to render <Image> components.
+        const alt = text || "image";
+        const idx = imageRegistry.length;
+        imageRegistry.push({ src: href, alt });
+        return `⬚⟪${idx}⟫⟪${alt}⟫`;
       },
     })
   );
@@ -491,15 +455,77 @@ function createMarkedInstance(width: number = 80): Marked {
   return instance;
 }
 
+// ===== Line segment parsing =====
+
+// Box-drawing characters used by marked-terminal for tables.
+export const TABLE_CHARS_RE = /[│┌┐└┘├┤┬┴┼─]/;
+
+/**
+ * Parse a rendered line into segments of text and inline images.
+ *
+ * Image placeholders (⬚⟪index⟫⟪alt⟫) are split out as separate image parts.
+ * The index references the imageRegistry to get the actual src URL.
+ *
+ * Exception: if the line contains box-drawing table characters, images are
+ * kept as text (alt text only) to preserve the table structure.
+ */
+export function parseLineSegments(rawLine: string, imageRegistry: ImageRegistryEntry[]): LinePart[] {
+  const clean = stripAnsi(rawLine);
+
+  // Fast path: no images on this line
+  if (!clean.includes("⬚⟪")) {
+    return [{ type: "text", content: rawLine }];
+  }
+
+  // Line contains image(s) — work with clean text for reliable parsing
+  const parts: LinePart[] = [];
+  let lastIndex = 0;
+
+  for (const match of clean.matchAll(new RegExp(IMG_PLACEHOLDER_RE.source, "g"))) {
+    const matchIndex = match.index!;
+
+    // Text before this image
+    if (matchIndex > lastIndex) {
+      const textBefore = clean.slice(lastIndex, matchIndex);
+      if (textBefore.trim()) {
+        parts.push({ type: "text", content: textBefore });
+      }
+    }
+
+    // Look up the actual src URL from the registry
+    const imgIdx = parseInt(match[1]!, 10);
+    const entry = imageRegistry[imgIdx];
+    const alt = match[2] || entry?.alt || "image";
+    const src = entry?.src || "";
+
+    parts.push({
+      type: "image",
+      content: alt,
+      src,
+      alt,
+    });
+
+    lastIndex = matchIndex + match[0].length;
+  }
+
+  // Remaining text after last image
+  if (lastIndex < clean.length) {
+    const textAfter = clean.slice(lastIndex);
+    if (textAfter.trim()) {
+      parts.push({ type: "text", content: textAfter });
+    }
+  }
+
+  return parts.length > 0 ? parts : [{ type: "text", content: rawLine }];
+}
+
 // ===== Main Rendering Pipeline =====
 
 export interface RenderResult {
   /** Terminal-formatted text (with ANSI codes), split into lines */
   lines: string[];
-  /** Extracted images with their positions */
-  images: ExtractedImage[];
-  /** Map from line index to image ID (for tabbable images) */
-  imageLineMap: Map<number, string>;
+  /** Each line parsed into segments (text + inline images) */
+  parsedLines: LinePart[][];
   /** Extracted links with their positions */
   links: ExtractedLink[];
   /** Map from line index to link ID (for focusable links) */
@@ -513,21 +539,23 @@ const URL_REGEX = /https?:\/\/[^\s)\]>]+/g;
  * Render an HTML email body to terminal-formatted text.
  *
  * Pipeline:
- *   1. DOM preprocessing (cheerio) — sanitize, extract images, unwrap layout tables
- *   2. Turndown — HTML → Markdown (with smart table/link/image rules)
- *   3. marked-terminal — Markdown → ANSI terminal text
- *   4. Post-processing — collapse blank lines, build image/link maps
+ *   1. DOM preprocessing (cheerio) — sanitize, remove tracking pixels, unwrap layout tables
+ *   2. Turndown — HTML → Markdown (images become ![alt](src) naturally)
+ *   3. marked-terminal — Markdown → ANSI terminal text (images become ⬚⟪src⟫⟪alt⟫)
+ *   4. Post-processing — collapse blank lines, parse inline segments, build link map
  */
 export function renderHtmlEmail(html: string, width: number = 80): RenderResult {
-  // Step 1: DOM-based preprocessing
-  const { html: cleanedHtml, images } = preprocessEmailDom(html);
+  // Step 1: DOM-based preprocessing (leaves <img> intact)
+  const { html: cleanedHtml } = preprocessEmailDom(html);
 
   // Step 2: Convert HTML to Markdown via Turndown
   const td = createTurndownService();
   const markdown = td.turndown(cleanedHtml);
 
   // Step 3: Render Markdown to terminal text via marked-terminal
-  const markedInstance = createMarkedInstance(width);
+  // Image registry collects src URLs; placeholders use compact ⬚⟪index⟫⟪alt⟫ format
+  const imageRegistry: ImageRegistryEntry[] = [];
+  const markedInstance = createMarkedInstance(width, imageRegistry);
   const terminalText = markedInstance.parse(markdown) as string;
 
   // Step 4: Collapse excessive blank lines
@@ -547,93 +575,19 @@ export function renderHtmlEmail(html: string, width: number = 80): RenderResult 
   while (lines.length > 0 && stripAnsi(lines[0]!).trim() === "") lines.shift();
   while (lines.length > 0 && stripAnsi(lines[lines.length - 1]!).trim() === "") lines.pop();
 
-  // Step 5: Split lines that mix text with image placeholders
-  const knownPlaceholders = images.map(img => `⬚ ${img.placeholder}`);
-  const finalLines: string[] = [];
-  for (const line of lines) {
-    const clean = stripAnsi(line).trim();
-    if (!clean.includes("⬚ [IMG:")) {
-      finalLines.push(line);
-      continue;
-    }
+  // Step 5: Parse each line into segments (text + inline images)
+  const parsedLines: LinePart[][] = lines.map(line => parseLineSegments(line, imageRegistry));
 
-    // Don't touch table rows (images already extracted at Turndown stage)
-    if (/[│┌┐└┘├┤┬┴┼]/.test(clean)) {
-      finalLines.push(line);
-      continue;
-    }
-
-    // Find all placeholder occurrences
-    const found: { text: string; index: number }[] = [];
-    let searchFrom = 0;
-    while (searchFrom < clean.length) {
-      let best: { text: string; index: number } | null = null;
-      for (const ph of knownPlaceholders) {
-        const idx = clean.indexOf(ph, searchFrom);
-        if (idx !== -1 && (!best || idx < best.index)) {
-          best = { text: ph, index: idx };
-        }
-      }
-      if (!best) {
-        const partialMatch = clean.slice(searchFrom).match(/⬚ \[IMG:\d+\]/);
-        if (partialMatch && partialMatch.index !== undefined) {
-          best = { text: partialMatch[0]!, index: searchFrom + partialMatch.index };
-        }
-      }
-      if (!best) break;
-      found.push(best);
-      searchFrom = best.index + best.text.length;
-    }
-
-    if (found.length === 0) {
-      finalLines.push(line);
-      continue;
-    }
-
-    if (found.length === 1 && clean.trim() === found[0]!.text) {
-      finalLines.push(line);
-      continue;
-    }
-
-    // Split around each placeholder
-    let cursor = 0;
-    for (const { text, index } of found) {
-      const before = clean.slice(cursor, index).trim();
-      if (before) finalLines.push(before);
-      finalLines.push(text);
-      cursor = index + text.length;
-    }
-    const after = clean.slice(cursor).trim();
-    if (after) finalLines.push(after);
-  }
-
-  while (finalLines.length > 0 && stripAnsi(finalLines[0]!).trim() === "") finalLines.shift();
-  while (finalLines.length > 0 && stripAnsi(finalLines[finalLines.length - 1]!).trim() === "") finalLines.pop();
-
-  // Step 6: Build image / link maps
-  const imageLineMap = new Map<number, string>();
+  // Step 6: Build link map (skip lines that contain images to avoid matching image URLs)
   const linkLineMap = new Map<number, string>();
   const links: ExtractedLink[] = [];
   let linkCounter = 0;
 
-  const IMG_LINE_RE = /^⬚ \[IMG:(\d+)\]( .+)?$/;
+  for (let i = 0; i < lines.length; i++) {
+    // Skip lines with inline images
+    if (parsedLines[i]!.some(p => p.type === "image")) continue;
 
-  for (let i = 0; i < finalLines.length; i++) {
-    const line = finalLines[i] || "";
-    const cleanLine = stripAnsi(line).trim();
-
-    const imgMatch = cleanLine.match(IMG_LINE_RE);
-    if (imgMatch) {
-      const imgNum = parseInt(imgMatch[1]!, 10);
-      const img = images.find((_, idx) => idx + 1 === imgNum);
-      if (img) {
-        imageLineMap.set(i, img.id);
-      }
-    }
-
-    if (imageLineMap.has(i)) continue;
-
-    const cleanForUrl = stripAnsi(line);
+    const cleanForUrl = stripAnsi(lines[i]!);
     const urlMatch = cleanForUrl.match(URL_REGEX);
     if (urlMatch) {
       const id = `link-${++linkCounter}`;
@@ -643,17 +597,17 @@ export function renderHtmlEmail(html: string, width: number = 80): RenderResult 
     }
   }
 
-  return { lines: finalLines, images, imageLineMap, links, linkLineMap };
+  return { lines, parsedLines, links, linkLineMap };
 }
 
 /**
  * Render a plain text email body (for emails without HTML).
  */
 export function renderPlainTextEmail(text: string): RenderResult {
+  const lines = text.split("\n");
   return {
-    lines: text.split("\n"),
-    images: [],
-    imageLineMap: new Map(),
+    lines,
+    parsedLines: lines.map(l => [{ type: "text" as const, content: l }]),
     links: [],
     linkLineMap: new Map(),
   };
