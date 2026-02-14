@@ -18,6 +18,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Bun-1.0+-f9f1e1?logo=bun&logoColor=black" alt="Bun">
+  <a href="https://github.com/semos-labs/aion/releases/latest"><img src="https://img.shields.io/github/downloads/semos-labs/epist/total?label=Downloads&color=blue" alt="Downloads"></a>
   <img src="https://img.shields.io/badge/License-MIT-blue" alt="MIT License">
 </p>
 
