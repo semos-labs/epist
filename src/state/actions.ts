@@ -70,15 +70,19 @@ import {
   gmailLabelCountsAtom,
   hasMoreEmailsAtom,
   isSyncingAtom,
+  searchRemoteResultsAtom,
+  isSearchingRemoteAtom,
+  userLabelsAtom,
   type FocusContext,
   type Overlay,
   type MessageType,
+  type UserLabel,
 } from "./atoms.ts";
 import { openFile, quickLook, saveFile } from "../utils/files.ts";
 import { saveDraft, deleteDraft } from "../utils/drafts.ts";
 import { loadConfig, saveConfig, resolvePath, type EpistConfig } from "../utils/config.ts";
 import { collectFiles, filterFiles, clearFileCache } from "../utils/fzf.ts";
-import { formatEmailAddress, formatEmailAddresses, isStarred, isUnread, FOLDER_LABELS, type FolderLabel, type LabelId, type AttendeeStatus } from "../domain/email.ts";
+import { formatEmailAddress, formatEmailAddresses, isStarred, isUnread, FOLDER_LABELS, type LabelId, type AttendeeStatus } from "../domain/email.ts";
 import { findCommand, getAllCommands } from "../keybinds/registry.ts";
 
 // ===== Configuration =====
@@ -236,7 +240,9 @@ export const moveSelectionAtom = atom(
     const thread = threads[newIndex];
     if (thread) {
       set(selectedThreadIdAtom, thread.id);
+      set(viewScrollOffsetAtom, 0);
       set(activeLinkIndexAtom, -1);
+      set(focusedMessageIndexAtom, -1);
     }
 
     // Auto-load more when within 5 items of the bottom
@@ -435,7 +441,7 @@ export const deleteEmailAtom = atom(
 // Change current label/folder
 export const changeLabelAtom = atom(
   null,
-  async (get, set, label: FolderLabel) => {
+  async (get, set, label: LabelId) => {
     set(currentLabelAtom, label);
     set(selectedThreadIdAtom, null);
     set(listScrollOffsetAtom, 0);
@@ -469,7 +475,7 @@ export const changeLabelAtom = atom(
 // Move thread to a target folder
 export const moveToFolderAtom = atom(
   null,
-  (get, set, targetLabel: FolderLabel) => {
+  (get, set, targetLabel: LabelId) => {
     const thread = get(selectedThreadAtom);
     if (!thread) return;
 
@@ -703,6 +709,8 @@ export const openSearchAtom = atom(
   (get, set) => {
     set(searchQueryAtom, "");
     set(searchSelectedIndexAtom, 0);
+    set(searchRemoteResultsAtom, []);
+    set(isSearchingRemoteAtom, false);
     set(focusAtom, "search");
   }
 );
@@ -842,17 +850,87 @@ export const executeCommandAtom = atom(
 
 // ===== Search Actions =====
 
-// Update search query
+// Debounce timer for remote search
+let _searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+const SEARCH_DEBOUNCE_MS = 500;
+
+// Search Gmail API for all logged-in accounts
+export const searchRemoteAtom = atom(
+  null,
+  async (get, set) => {
+    const query = get(searchQueryAtom).trim();
+    if (!query) return;
+
+    const isLoggedIn = get(isLoggedInAtom);
+    if (!isLoggedIn) return;
+
+    const accounts = get(googleAccountsAtom);
+    if (accounts.length === 0) return;
+
+    set(isSearchingRemoteAtom, true);
+
+    try {
+      const { searchMessages } = await import("../api/gmail.ts");
+
+      // Search all accounts in parallel
+      const results = await Promise.all(
+        accounts.map(acc => 
+          searchMessages(acc.email, query, 30).catch(() => [] as any[])
+        )
+      );
+
+      // Only update if the query hasn't changed while we were fetching
+      if (get(searchQueryAtom).trim() !== query) return;
+
+      const allResults = results.flat();
+
+      // Also upsert into local DB for caching
+      try {
+        const { upsertEmails } = await import("../lib/database.ts");
+        upsertEmails(allResults);
+      } catch {
+        // DB upsert failure is non-critical
+      }
+
+      set(searchRemoteResultsAtom, allResults);
+
+      // Update selection to first result if nothing selected
+      const threads = get(filteredThreadsAtom);
+      if (threads.length > 0 && !get(selectedThreadIdAtom)) {
+        set(selectedThreadIdAtom, threads[0]!.id);
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Search failed";
+      set(showMessageAtom, { text: msg, type: "error" });
+    } finally {
+      set(isSearchingRemoteAtom, false);
+    }
+  }
+);
+
+// Update search query — local filter is instant, remote is debounced
 export const updateSearchQueryAtom = atom(
   null,
   (get, set, query: string) => {
     set(searchQueryAtom, query);
     set(searchSelectedIndexAtom, 0);
     
-    // Update selection to first matching thread
+    // Update selection to first matching thread (local results, instant)
     const threads = get(filteredThreadsAtom);
     if (threads.length > 0) {
       set(selectedThreadIdAtom, threads[0]!.id);
+    }
+
+    // Debounce remote search
+    if (_searchDebounceTimer) clearTimeout(_searchDebounceTimer);
+    if (query.trim()) {
+      _searchDebounceTimer = setTimeout(() => {
+        set(searchRemoteAtom);
+      }, SEARCH_DEBOUNCE_MS);
+    } else {
+      // Clear remote results when query is empty
+      set(searchRemoteResultsAtom, []);
+      set(isSearchingRemoteAtom, false);
     }
   }
 );
@@ -861,8 +939,11 @@ export const updateSearchQueryAtom = atom(
 export const closeSearchAtom = atom(
   null,
   (get, set) => {
+    if (_searchDebounceTimer) clearTimeout(_searchDebounceTimer);
     set(focusAtom, "list");
     set(searchQueryAtom, "");
+    set(searchRemoteResultsAtom, []);
+    set(isSearchingRemoteAtom, false);
   }
 );
 
@@ -1455,10 +1536,10 @@ export const updateInlineReplyContentAtom = atom(
   }
 );
 
-// Send inline reply
+// Send inline reply — uses Gmail API when logged in
 export const sendInlineReplyAtom = atom(
   null,
-  (get, set) => {
+  async (get, set) => {
     const email = get(selectedEmailAtom);
     if (!email) return;
 
@@ -1469,10 +1550,33 @@ export const sendInlineReplyAtom = atom(
     }
 
     const fromAccount = get(replyFromAccountAtom);
+    const isLoggedIn = get(isLoggedInAtom);
     const to = formatEmailAddress(email.from);
-    // In a real app, this would send via the backend
-    const fromLabel = fromAccount ? ` from ${fromAccount.email}` : "";
-    set(showMessageAtom, { text: `Quick reply sent${fromLabel} to ${to}`, type: "success" });
+
+    if (isLoggedIn && fromAccount) {
+      try {
+        const { sendMessage } = await import("../api/gmail.ts");
+
+        await sendMessage(fromAccount.email, {
+          to: [email.from.email],
+          subject: `Re: ${email.subject}`,
+          body: content,
+          inReplyTo: email.messageId,
+          references: email.references,
+          threadId: email.threadId,
+        });
+
+        set(showMessageAtom, { text: `Quick reply sent from ${fromAccount.email} to ${to}`, type: "success" });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : "Unknown error";
+        set(showMessageAtom, { text: `Send failed: ${msg}`, type: "error" });
+        return; // Don't clear the form on failure
+      }
+    } else {
+      set(showMessageAtom, { text: "Not logged in — cannot send", type: "error" });
+      return;
+    }
+
     set(inlineReplyOpenAtom, false);
     set(inlineReplyContentAtom, "");
   }
@@ -1715,7 +1819,7 @@ export const toggleFolderSidebarAtom = atom(
     } else {
       // Open and select current folder
       const currentLabel = get(currentLabelAtom);
-      const idx = FOLDER_LABELS.indexOf(currentLabel);
+      const idx = (FOLDER_LABELS as string[]).indexOf(currentLabel);
       set(selectedFolderIndexAtom, idx >= 0 ? idx : 0);
       set(folderSidebarOpenAtom, true);
       set(focusAtom, "folders");
@@ -2084,6 +2188,110 @@ export const previewComposeAttachmentAtom = atom(
   }
 );
 
+// ===== Label Actions =====
+
+// Map Gmail hex background color to nearest terminal color
+function hexToTerminalColor(hex?: string): string {
+  if (!hex) return "white";
+  const h = hex.replace("#", "").toLowerCase();
+  // Parse RGB
+  const r = parseInt(h.slice(0, 2), 16) || 0;
+  const g = parseInt(h.slice(2, 4), 16) || 0;
+  const b = parseInt(h.slice(4, 6), 16) || 0;
+
+  // Map to basic terminal colors by closest match
+  const colors: [string, number, number, number][] = [
+    ["red",         220, 50,  50],
+    ["redBright",   255, 100, 100],
+    ["green",       50,  180, 80],
+    ["greenBright", 100, 220, 120],
+    ["yellow",      240, 180, 40],
+    ["yellowBright",255, 220, 80],
+    ["blue",        60,  100, 220],
+    ["blueBright",  100, 140, 255],
+    ["magenta",     180, 60,  180],
+    ["magentaBright",220,120, 220],
+    ["cyan",        50,  180, 200],
+    ["cyanBright",  100, 220, 240],
+    ["white",       200, 200, 200],
+    ["gray",        128, 128, 128],
+  ];
+
+  let best = "white";
+  let bestDist = Infinity;
+  for (const [name, cr, cg, cb] of colors) {
+    const dist = (r - cr) ** 2 + (g - cg) ** 2 + (b - cb) ** 2;
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = name;
+    }
+  }
+  return best;
+}
+
+// Fetch user labels from Gmail for all accounts.
+// Loads cached labels from DB instantly, then refreshes from Gmail in the background.
+export const fetchUserLabelsAtom = atom(null, async (get, set) => {
+  const accounts = get(googleAccountsAtom);
+  if (accounts.length === 0) return;
+
+  // 1. Instantly load cached labels from SQLite so sidebar renders immediately
+  try {
+    const { getCachedUserLabels } = await import("../lib/database.ts");
+    const cached = getCachedUserLabels();
+    if (cached.length > 0) {
+      set(userLabelsAtom, cached.map(l => ({
+        id: l.id,
+        name: l.name,
+        color: l.color ?? "white",
+        accountEmail: l.accountEmail,
+      } satisfies UserLabel)));
+    }
+  } catch {
+    // DB read failed — not critical, we'll fetch from API
+  }
+
+  // 2. Fetch fresh labels from Gmail and update both atom + cache
+  try {
+    const { listLabels } = await import("../api/gmail.ts");
+    const { upsertUserLabels } = await import("../lib/database.ts");
+
+    const results = await Promise.all(
+      accounts.map(async (acc) => {
+        try {
+          const labels = await listLabels(acc.email);
+          const userLbls = labels
+            .filter(l => l.type === "user")
+            .map(l => ({
+              id: l.id,
+              name: l.name,
+              color: hexToTerminalColor(l.color?.backgroundColor),
+              accountEmail: acc.email,
+            } satisfies UserLabel));
+
+          // Persist to SQLite cache
+          upsertUserLabels(acc.email, userLbls.map(l => ({
+            id: l.id,
+            name: l.name,
+            color: l.color,
+          })));
+
+          return userLbls;
+        } catch {
+          return [];
+        }
+      })
+    );
+
+    const fresh = results.flat();
+    if (fresh.length > 0) {
+      set(userLabelsAtom, fresh);
+    }
+  } catch {
+    // Non-critical — sidebar keeps showing cached labels
+  }
+});
+
 // ===== Auth Actions =====
 
 // Login to Google (add a new account)
@@ -2128,6 +2336,9 @@ export const loginAtom = atom(null, async (get, set) => {
       onStatus: (text, type) => set(showMessageAtom, { text, type }),
       onHasMore: (hasMore) => set(hasMoreEmailsAtom, hasMore),
     });
+
+    // Fetch custom labels
+    set(fetchUserLabelsAtom);
   }
 });
 
@@ -2146,6 +2357,8 @@ export const logoutAtom = atom(null, async (get, set) => {
   set(emailsAtom, []);
   set(gmailLabelCountsAtom, {});
   set(hasMoreEmailsAtom, false);
+  set(userLabelsAtom, []);
+  set(currentLabelAtom, "INBOX");
   set(showMessageAtom, { text: "Logged out from all accounts", type: "success" });
 });
 
@@ -2221,6 +2434,9 @@ export const checkAuthAtom = atom(null, async (get, set) => {
         onStatus: (text, type) => set(showMessageAtom, { text, type }),
         onHasMore: (hasMore) => set(hasMoreEmailsAtom, hasMore),
       });
+
+      // Fetch custom labels
+      set(fetchUserLabelsAtom);
     }
   } catch {
     // No accounts, that's fine

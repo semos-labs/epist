@@ -2,8 +2,8 @@ import React, { useState, useCallback, useMemo } from "react";
 import { Box, Text, useApp, FocusScope } from "@semos-labs/glyph";
 import { useSetAtom, useAtomValue } from "jotai";
 import { moveToFolderAtom, popOverlayAtom } from "../state/actions.ts";
-import { currentLabelAtom } from "../state/atoms.ts";
-import { FOLDER_LABELS, type FolderLabel } from "../domain/email.ts";
+import { currentLabelAtom, userLabelsAtom, accountFilterAtom } from "../state/atoms.ts";
+import { FOLDER_LABELS, getLabelDisplay, type LabelId } from "../domain/email.ts";
 import { ScopedKeybinds } from "../keybinds/useKeybinds.tsx";
 import { icons } from "./icons.ts";
 
@@ -22,9 +22,41 @@ export function MoveToFolderPicker() {
   const currentLabel = useAtomValue(currentLabelAtom);
   const moveToFolder = useSetAtom(moveToFolderAtom);
   const popOverlay = useSetAtom(popOverlayAtom);
+  const allUserLabels = useAtomValue(userLabelsAtom);
+  const accountFilter = useAtomValue(accountFilterAtom);
 
-  // Filter out the current folder from the list
-  const folders = FOLDER_LABELS.filter(f => f !== currentLabel);
+  // Build folder list: system + custom labels, minus current
+  const folders = useMemo(() => {
+    const items: { id: LabelId; name: string; icon?: string; color?: string }[] = [];
+
+    for (const label of FOLDER_LABELS) {
+      if (label === currentLabel) continue;
+      items.push({
+        id: label,
+        name: getLabelDisplay(label),
+        icon: FOLDER_ICONS[label] || icons.folder,
+      });
+    }
+
+    // Custom labels (dedup by name)
+    const filtered = accountFilter
+      ? allUserLabels.filter(l => l.accountEmail === accountFilter)
+      : allUserLabels;
+    const seen = new Set<string>();
+    for (const label of filtered) {
+      if (!seen.has(label.name) && label.id !== currentLabel) {
+        seen.add(label.name);
+        items.push({
+          id: label.id,
+          name: label.name,
+          color: label.color,
+        });
+      }
+    }
+
+    return items;
+  }, [currentLabel, allUserLabels, accountFilter]);
+
   const [selectedIndex, setSelectedIndex] = useState(0);
 
   const handlers = useMemo(() => ({
@@ -33,7 +65,7 @@ export function MoveToFolderPicker() {
     select: () => {
       const target = folders[selectedIndex];
       if (target) {
-        moveToFolder(target);
+        moveToFolder(target.id);
         popOverlay();
       }
     },
@@ -66,20 +98,24 @@ export function MoveToFolderPicker() {
 
         {folders.map((folder, index) => {
           const isSelected = index === selectedIndex;
-          const icon = FOLDER_ICONS[folder] || "📁";
-          const label = folder.charAt(0) + folder.slice(1).toLowerCase();
+          const isCustom = !FOLDER_ICONS[folder.id];
 
           return (
             <Box
-              key={folder}
+              key={folder.id}
               style={{
                 paddingX: 1,
                 flexDirection: "row",
                 bg: isSelected ? "white" : undefined,
               }}
             >
+              {isCustom ? (
+                <Text style={{ color: isSelected ? "black" : (folder.color || "white") }}>● </Text>
+              ) : (
+                <Text style={{ color: isSelected ? "black" : undefined }}>{folder.icon} </Text>
+              )}
               <Text style={{ color: isSelected ? "black" : undefined }}>
-                {icon} {label}
+                {folder.name}
               </Text>
             </Box>
           );

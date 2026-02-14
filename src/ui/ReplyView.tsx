@@ -468,7 +468,7 @@ export function ReplyView() {
             ^A:attach | ^G:manage | ^B:Cc/Bcc | ^F:{isFullscreen ? "compact" : "full"}
           </Text>
           <Text dim>
-            Ctrl+Enter: send | Esc: cancel
+            Ctrl+S: send | Esc: cancel
           </Text>
         </Box>
 

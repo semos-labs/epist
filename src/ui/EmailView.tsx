@@ -429,14 +429,17 @@ function MessageCard({ email, isFocused, linkIndexOffset, activeLinkIndex, viewF
 
   const cardRef = useRef(null);
   const scrollIntoView = useScrollIntoView(cardRef);
-  const wasFocused = useRef(false);
+  // null = "first render, never scroll". Only scroll on genuine false→true transition
+  // (e.g. Tab/n/p between messages in a conversation).
+  const prevFocused = useRef<boolean | null>(null);
 
   useEffect(() => {
-    if (isFocused && !wasFocused.current) {
-      scrollIntoView({ block: "center" });
+    if (prevFocused.current === false && isFocused) {
+      scrollIntoView({ block: "nearest" });
     }
-    wasFocused.current = isFocused;
-  }, [isFocused, scrollIntoView]);
+    prevFocused.current = isFocused;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFocused]);
 
   return (
     <Box ref={cardRef} style={{
@@ -856,6 +859,7 @@ function EmailBody({ availableHeight, viewFocused }: { availableHeight: number; 
     <Box style={{ flexGrow: 1, flexDirection: "column" }}>
       <FocusScope trap={imageNavMode}>
         <ScrollView
+          key={thread.id}
           style={{ height: availableHeight }}
           scrollOffset={scrollOffset}
           onScroll={setScrollOffset}
@@ -911,7 +915,10 @@ function EmptyState() {
 }
 
 // Quick inline reply at the bottom of the email view
-function InlineReply({ width }: { width: number }) {
+// Height of the inline reply box (border top/bottom + header + input lines)
+const INLINE_REPLY_HEIGHT = 2 + 1 + 3; // border=2, header=1, input=3
+
+function InlineReply() {
   const isOpen = useAtomValue(inlineReplyOpenAtom);
   const content = useAtomValue(inlineReplyContentAtom);
   const updateContent = useSetAtom(updateInlineReplyContentAtom);
@@ -938,14 +945,14 @@ function InlineReply({ width }: { width: number }) {
       }}>
         <Box style={{ flexDirection: "row", justifyContent: "space-between" }}>
           <Text style={{ bold: true, color: "cyan" }}>{icons.reply} Quick Reply</Text>
-          <Text dim>Ctrl+Enter:send | Ctrl+F:expand | Esc:cancel</Text>
+          <Text dim>Ctrl+S:send | Ctrl+F:expand | Esc:cancel</Text>
         </Box>
         <Input
           value={content}
           onChange={updateContent}
           multiline
           placeholder="Type your quick reply..."
-          style={{ width: Math.max(10, width - 4), height: 3 }}
+          style={{ width: "100%", height: 3 }}
           focusedStyle={{ bg: "blackBright" }}
         />
         <ScopedKeybinds scope="inlineReply" handlers={handlers} priority />
@@ -955,19 +962,21 @@ function InlineReply({ width }: { width: number }) {
 }
 
 export function EmailView() {
-  const { rows: terminalHeight, columns: terminalWidth } = useApp();
+  const { rows: terminalHeight } = useApp();
   const thread = useAtomValue(selectedThreadAtom);
   const email = useAtomValue(selectedEmailAtom);
   const focus = useAtomValue(focusAtom);
   const hasOverlay = useAtomValue(hasOverlayAtom);
   const folderSidebarOpen = useAtomValue(folderSidebarOpenAtom);
+  const inlineReplyOpen = useAtomValue(inlineReplyOpenAtom);
 
   const isFocused = focus === "view";
 
   // Subject bar = 1 line. Everything else (headers, attachments, body) is inside the ScrollView.
   const subjectLine = 1;
   const chrome = subjectLine + 2; // +2 for outer padding/border
-  const availableHeight = Math.max(5, terminalHeight - chrome);
+  const replyChrome = inlineReplyOpen ? INLINE_REPLY_HEIGHT : 0;
+  const availableHeight = Math.max(5, terminalHeight - chrome - replyChrome);
 
   return (
     <Box
@@ -978,7 +987,7 @@ export function EmailView() {
         paddingX: 1,
       }}
     >
-      <Box style={{ flexGrow: 1, flexDirection: "column", clip: true }}>
+      <Box style={{ flexGrow: 1, flexShrink: 1, flexDirection: "column", clip: true }}>
         {thread ? (
           <>
             <SubjectBar />
@@ -990,7 +999,7 @@ export function EmailView() {
       </Box>
 
       {/* Quick inline reply box */}
-      <InlineReply width={terminalWidth} />
+      <InlineReply />
 
       {isFocused && !hasOverlay && !folderSidebarOpen && <ViewKeybinds hasCalendarInvite={!!email?.calendarEvent} />}
     </Box>

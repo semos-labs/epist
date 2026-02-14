@@ -56,3 +56,20 @@ export const labelCounts = sqliteTable("label_counts", {
 }, (table) => [
   primaryKey({ columns: [table.accountEmail, table.labelId] }),
 ]);
+
+// ===== User labels table (cached Gmail labels) =====
+
+export const userLabels = sqliteTable("user_labels", {
+  /** Gmail label ID (e.g. "Label_123") */
+  id: text("id").notNull(),
+  accountEmail: text("account_email").notNull(),
+  name: text("name").notNull(),
+  /** Terminal color name — pre-converted from hex */
+  color: text("color"),
+  updatedAt: integer("updated_at", { mode: "timestamp" })
+    .notNull()
+    .$defaultFn(() => new Date()),
+}, (table) => [
+  primaryKey({ columns: [table.id, table.accountEmail] }),
+  index("idx_user_labels_account").on(table.accountEmail),
+]);

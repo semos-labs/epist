@@ -167,7 +167,7 @@ export const KEYBIND_REGISTRY: Record<KeybindScope, KeybindDef[]> = {
 
   // ── Inline Reply ───────────────────────────────────────
   inlineReply: [
-    { key: "ctrl+return", display: "Ctrl+Enter", description: "Send reply", action: "send" },
+    { key: "ctrl+s", display: "Ctrl+s", description: "Send reply", action: "send" },
     { key: "escape", display: "Esc", description: "Cancel", action: "cancel" },
     { key: "ctrl+f", display: "Ctrl+f", description: "Expand to full reply", action: "expand" },
   ],
@@ -178,6 +178,9 @@ export const KEYBIND_REGISTRY: Record<KeybindScope, KeybindDef[]> = {
     { key: "down", display: "j / ↓", description: "Next folder", action: "nextFolder" },
     { key: "k", display: "k / ↑", description: "Previous folder", action: "prevFolder" },
     { key: "up", display: "k / ↑", description: "Previous folder", action: "prevFolder" },
+    { key: "space", display: "Space", description: "Toggle categories", action: "toggleCategories" },
+    { key: "right", display: "→", description: "Toggle categories", action: "toggleCategories" },
+    { key: "left", display: "←", description: "Collapse categories", action: "collapseCategories" },
     { key: "escape", display: "Esc", description: "Close sidebar", action: "closeSidebar" },
     { key: "ctrl+f", display: "Ctrl+f", description: "Close sidebar", action: "closeSidebar" },
   ],
@@ -195,7 +198,7 @@ export const KEYBIND_REGISTRY: Record<KeybindScope, KeybindDef[]> = {
 
   // ── Compose / Reply ────────────────────────────────────
   compose: [
-    { key: "ctrl+return", display: "Ctrl+Enter", description: "Send email", action: "send" },
+    { key: "ctrl+s", display: "Ctrl+s", description: "Send email", action: "send" },
     { key: "escape", display: "Esc", description: "Cancel", action: "cancel" },
     { key: "ctrl+f", display: "Ctrl+f", description: "Toggle fullscreen", action: "toggleFullscreen" },
     { key: "ctrl+b", display: "Ctrl+b", description: "Toggle Cc/Bcc", action: "toggleCcBcc" },
@@ -204,7 +207,7 @@ export const KEYBIND_REGISTRY: Record<KeybindScope, KeybindDef[]> = {
   ],
 
   reply: [
-    { key: "ctrl+return", display: "Ctrl+Enter", description: "Send reply", action: "send" },
+    { key: "ctrl+s", display: "Ctrl+s", description: "Send reply", action: "send" },
     { key: "escape", display: "Esc", description: "Cancel reply", action: "cancel" },
     { key: "ctrl+f", display: "Ctrl+f", description: "Toggle fullscreen", action: "toggleFullscreen" },
     { key: "ctrl+b", display: "Ctrl+b", description: "Toggle Cc/Bcc", action: "toggleCcBcc" },

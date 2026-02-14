@@ -13,7 +13,7 @@
     "release:major": "bun scripts/release.ts --major"
   },
   "dependencies": {
-    "@semos-labs/glyph": "^0.1.83",
+    "@semos-labs/glyph": "^0.1.86",
     "cheerio": "^1.2.0",
     "chrono-node": "^2.8.0",
     "drizzle-orm": "^0.45.1",

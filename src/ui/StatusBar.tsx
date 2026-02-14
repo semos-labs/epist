@@ -13,6 +13,7 @@ import {
   isLoggedInAtom,
   isAuthLoadingAtom,
   googleAccountsAtom,
+  isSearchingRemoteAtom,
 } from "../state/atoms.ts";
 import {
   executeCommandAtom,
@@ -144,6 +145,7 @@ function SearchInput() {
   const updateQuery = useSetAtom(updateSearchQueryAtom);
   const closeSearch = useSetAtom(closeSearchAtom);
   const moveSelection = useSetAtom(moveSelectionAtom);
+  const isSearchingRemote = useAtomValue(isSearchingRemoteAtom);
 
   const handleKeyPress = useCallback((key: { name: string; ctrl?: boolean; shift?: boolean; sequence?: string }) => {
     const isCtrlP = key.sequence === "\x10";
@@ -183,6 +185,7 @@ function SearchInput() {
             flexGrow: 1,
           }}
         />
+        {isSearchingRemote && <Text style={{ color: "yellow" }}> ⟳</Text>}
       </Box>
     </FocusScope>
   );

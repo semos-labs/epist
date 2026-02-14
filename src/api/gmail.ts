@@ -149,14 +149,17 @@ function decodeBase64Url(data: string): string {
 }
 
 /**
- * Convert a raw Gmail message into our app-level Email type
+ * Convert a raw Gmail message into our app-level Email type.
+ *
+ * Async because it may need to download an ICS attachment from Gmail
+ * if no inline text/calendar part is found.
  */
-function gmailMessageToEmail(msg: GmailMessage, accountEmail: string): Email {
+async function gmailMessageToEmail(msg: GmailMessage, accountEmail: string): Promise<Email> {
   const headers = msg.payload.headers;
   const { text, html } = extractBody(msg.payload);
-  const attachments = extractAttachments(msg.payload);
+  let attachments = extractAttachments(msg.payload);
 
-  // Try to parse calendar invite
+  // Try to parse calendar invite from inline text/calendar MIME part
   let calendarEvent = undefined;
   const icsData = extractCalendarPart(msg.payload);
   if (icsData) {
@@ -164,6 +167,33 @@ function gmailMessageToEmail(msg: GmailMessage, accountEmail: string): Email {
       calendarEvent = parseICS(icsData);
     } catch {
       apiLogger.warn("Failed to parse calendar invite", { messageId: msg.id });
+    }
+  }
+
+  // If no inline calendar part, check for .ics attachments and auto-download+parse
+  if (!calendarEvent) {
+    const icsAttachment = attachments.find(
+      a => a.mimeType === "text/calendar" ||
+           a.mimeType === "application/ics" ||
+           a.filename.toLowerCase().endsWith(".ics")
+    );
+
+    if (icsAttachment) {
+      try {
+        const icsBytes = await getAttachment(accountEmail, msg.id, icsAttachment.attachmentId);
+        const icsText = new TextDecoder().decode(icsBytes);
+        calendarEvent = parseICS(icsText, accountEmail) ?? undefined;
+
+        if (calendarEvent) {
+          // Remove the ICS from the visible attachment list — it's shown as calendar UI instead
+          attachments = attachments.filter(a => a.attachmentId !== icsAttachment.attachmentId);
+        }
+      } catch {
+        apiLogger.warn("Failed to download/parse ICS attachment", {
+          messageId: msg.id,
+          filename: icsAttachment.filename,
+        });
+      }
     }
   }
 
@@ -241,7 +271,7 @@ export async function listMessages(
 export async function getMessage(accountEmail: string, messageId: string): Promise<Email> {
   const res = await gmailFetch(accountEmail, `/messages/${messageId}?format=full`);
   const msg = await res.json() as GmailMessage;
-  return gmailMessageToEmail(msg, accountEmail);
+  return await gmailMessageToEmail(msg, accountEmail);
 }
 
 /**
@@ -253,7 +283,7 @@ export async function getThread(
 ): Promise<Email[]> {
   const res = await gmailFetch(accountEmail, `/threads/${threadId}?format=full`);
   const data = await res.json() as { messages: GmailMessage[] };
-  return (data.messages || []).map(msg => gmailMessageToEmail(msg, accountEmail));
+  return await Promise.all((data.messages || []).map(msg => gmailMessageToEmail(msg, accountEmail)));
 }
 
 /**
@@ -486,6 +516,10 @@ export interface GmailLabel {
   type: "system" | "user";
   messagesTotal?: number;
   messagesUnread?: number;
+  color?: {
+    textColor?: string;
+    backgroundColor?: string;
+  };
 }
 
 /**

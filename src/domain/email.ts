@@ -305,6 +305,21 @@ export const FOLDER_LABELS: FolderLabel[] = [
   "INBOX", "SENT", "DRAFT", "TRASH", "SPAM", "STARRED", "IMPORTANT",
 ];
 
+// Gmail category labels (system labels with CATEGORY_ prefix)
+export type CategoryLabel = "CATEGORY_PERSONAL" | "CATEGORY_SOCIAL" | "CATEGORY_PROMOTIONS" | "CATEGORY_UPDATES" | "CATEGORY_FORUMS";
+
+export const CATEGORY_LABELS: CategoryLabel[] = [
+  "CATEGORY_PERSONAL", "CATEGORY_SOCIAL", "CATEGORY_PROMOTIONS", "CATEGORY_UPDATES", "CATEGORY_FORUMS",
+];
+
+export const CATEGORY_ICONS: Record<CategoryLabel, string> = {
+  CATEGORY_PERSONAL: "👤",
+  CATEGORY_SOCIAL: "💬",
+  CATEGORY_PROMOTIONS: "🏷️",
+  CATEGORY_UPDATES: "🔔",
+  CATEGORY_FORUMS: "📢",
+};
+
 // ===== Validation schemas =====
 
 export const emailAddressSchema = z.object({

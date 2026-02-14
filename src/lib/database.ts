@@ -10,7 +10,7 @@ import { drizzle } from "drizzle-orm/bun-sqlite";
 import { eq, and, desc, sql, inArray } from "drizzle-orm";
 import { join } from "path";
 import { EPIST_DATA_DIR, ensureDirectories } from "./paths.ts";
-import { emails, syncState, labelCounts } from "./schema.ts";
+import { emails, syncState, labelCounts, userLabels } from "./schema.ts";
 import type { Email, LabelId } from "../domain/email.ts";
 import { apiLogger } from "./logger.ts";
 
@@ -26,7 +26,7 @@ function getDb() {
   _sqlite.run("PRAGMA journal_mode = WAL");
   _sqlite.run("PRAGMA synchronous = NORMAL");
 
-  _db = drizzle(_sqlite, { schema: { emails, syncState, labelCounts } });
+  _db = drizzle(_sqlite, { schema: { emails, syncState, labelCounts, userLabels } });
 
   // Auto-create tables via raw SQL (drizzle-kit push is for dev, this is runtime)
   _sqlite.run(`
@@ -65,6 +65,18 @@ function getDb() {
       PRIMARY KEY (account_email, label_id)
     )
   `);
+
+  _sqlite.run(`
+    CREATE TABLE IF NOT EXISTS user_labels (
+      id TEXT NOT NULL,
+      account_email TEXT NOT NULL,
+      name TEXT NOT NULL,
+      color TEXT,
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      PRIMARY KEY (id, account_email)
+    )
+  `);
+  _sqlite.run(`CREATE INDEX IF NOT EXISTS idx_user_labels_account ON user_labels(account_email)`);
 
   return _db;
 }
@@ -315,6 +327,49 @@ export function getDbLabelCounts(accountEmail?: string): Record<string, { total:
   return result;
 }
 
+// ===== User Labels Cache =====
+
+export interface CachedUserLabel {
+  id: string;
+  name: string;
+  color: string | null;
+  accountEmail: string;
+}
+
+/** Upsert a batch of user labels for an account (replaces all labels for that account) */
+export function upsertUserLabels(accountEmail: string, labels: Omit<CachedUserLabel, "accountEmail">[]): void {
+  const db = getDb();
+  // Delete existing labels for this account, then insert fresh
+  db.delete(userLabels).where(eq(userLabels.accountEmail, accountEmail)).run();
+  for (const l of labels) {
+    db.insert(userLabels)
+      .values({
+        id: l.id,
+        accountEmail,
+        name: l.name,
+        color: l.color,
+        updatedAt: new Date(),
+      })
+      .run();
+  }
+}
+
+/** Get all cached user labels, optionally filtered by account */
+export function getCachedUserLabels(accountEmail?: string): CachedUserLabel[] {
+  const db = getDb();
+  if (accountEmail) {
+    return db.select()
+      .from(userLabels)
+      .where(eq(userLabels.accountEmail, accountEmail))
+      .all()
+      .map(r => ({ id: r.id, name: r.name, color: r.color, accountEmail: r.accountEmail }));
+  }
+  return db.select()
+    .from(userLabels)
+    .all()
+    .map(r => ({ id: r.id, name: r.name, color: r.color, accountEmail: r.accountEmail }));
+}
+
 // ===== Housekeeping =====
 
 /** Clear all cached data for an account (e.g. after logout) */
@@ -323,6 +378,7 @@ export function clearAccountData(accountEmail: string): void {
   db.delete(emails).where(eq(emails.accountEmail, accountEmail)).run();
   db.delete(syncState).where(eq(syncState.accountEmail, accountEmail)).run();
   db.delete(labelCounts).where(eq(labelCounts.accountEmail, accountEmail)).run();
+  db.delete(userLabels).where(eq(userLabels.accountEmail, accountEmail)).run();
 }
 
 /** Clear all cached data */
@@ -331,6 +387,7 @@ export function clearAllData(): void {
   db.delete(emails).run();
   db.delete(syncState).run();
   db.delete(labelCounts).run();
+  db.delete(userLabels).run();
 }
 
 /** Initialize the database (call on app start) */

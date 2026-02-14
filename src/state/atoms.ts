@@ -1,5 +1,5 @@
 import { atom } from "jotai";
-import { groupIntoThreads, type Email, type LabelId, type FolderLabel } from "../domain/email.ts";
+import { groupIntoThreads, type Email, type LabelId } from "../domain/email.ts";
 import { parseSearchQuery, matchesSearch } from "../utils/searchParser.ts";
 import { type EpistConfig, type AccountConfig, getDefaultConfig } from "../utils/config.ts";
 
@@ -102,8 +102,20 @@ export const hasMoreEmailsAtom = atom<boolean>(false);
 // Whether a sync operation is currently in progress
 export const isSyncingAtom = atom<boolean>(false);
 
-// Current label/folder view
-export const currentLabelAtom = atom<FolderLabel>("INBOX");
+// Current label/folder view (system or custom label ID)
+export const currentLabelAtom = atom<LabelId>("INBOX");
+
+// User/custom labels fetched from Gmail (per account)
+export interface UserLabel {
+  id: string;
+  name: string;
+  color?: string; // terminal color name
+  accountEmail: string;
+}
+export const userLabelsAtom = atom<UserLabel[]>([]);
+
+// Whether the categories section in the folder sidebar is expanded
+export const categoriesExpandedAtom = atom<boolean>(false);
 
 // Account filter for inbox (null = all accounts / combined inbox)
 export const accountFilterAtom = atom<string | null>(null);
@@ -120,6 +132,12 @@ export const searchQueryAtom = atom<string>("");
 
 // Search results (email IDs)
 export const searchResultsAtom = atom<string[]>([]);
+
+// Remote search results (emails fetched from Gmail API)
+export const searchRemoteResultsAtom = atom<Email[]>([]);
+
+// Whether a remote Gmail search is in progress
+export const isSearchingRemoteAtom = atom<boolean>(false);
 
 // Search selected index
 export const searchSelectedIndexAtom = atom<number>(0);
@@ -280,17 +298,42 @@ export const filteredEmailsAtom = atom((get) => {
   const focus = get(focusAtom);
   const accountFilter = get(accountFilterAtom);
   
+  // In search mode: search across ALL local emails + remote results (ignore label filter)
+  if (focus === "search" && searchQuery.trim()) {
+    const filters = parseSearchQuery(searchQuery);
+    const remoteResults = get(searchRemoteResultsAtom);
+    
+    // Combine local + remote, dedup by ID
+    const seen = new Set<string>();
+    const combined: Email[] = [];
+    
+    for (const e of emails) {
+      if (!seen.has(e.id) && matchesSearch(e, filters)) {
+        // Apply account filter even in search mode
+        if (accountFilter && e.accountEmail !== accountFilter) continue;
+        seen.add(e.id);
+        combined.push(e);
+      }
+    }
+    
+    for (const e of remoteResults) {
+      if (!seen.has(e.id)) {
+        if (accountFilter && e.accountEmail !== accountFilter) continue;
+        seen.add(e.id);
+        combined.push(e);
+      }
+    }
+    
+    return combined.sort((a, b) => 
+      new Date(b.date).getTime() - new Date(a.date).getTime()
+    );
+  }
+  
   let filtered = emails.filter(e => e.labelIds.includes(label));
   
   // Apply account filter
   if (accountFilter) {
     filtered = filtered.filter(e => e.accountEmail === accountFilter);
-  }
-  
-  // Apply search filter if in search mode
-  if (focus === "search" && searchQuery.trim()) {
-    const filters = parseSearchQuery(searchQuery);
-    filtered = filtered.filter(e => matchesSearch(e, filters));
   }
   
   // Sort by date, newest first

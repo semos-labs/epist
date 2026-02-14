@@ -5,7 +5,7 @@
     "": {
       "name": "epist",
       "dependencies": {
-        "@semos-labs/glyph": "^0.1.83",
+        "@semos-labs/glyph": "^0.1.86",
         "cheerio": "^1.2.0",
         "chrono-node": "^2.8.0",
         "drizzle-orm": "^0.45.1",
@@ -96,7 +96,7 @@
 
     "@mixmark-io/domino": ["@mixmark-io/domino@2.2.0", "", {}, "sha512-Y28PR25bHXUg88kCV7nivXrP2Nj2RueZ3/l/jdx6J9f8J4nsEGcgX0Qe6lt7Pa+J79+kPiJU3LguR6O/6zrLOw=="],
 
-    "@semos-labs/glyph": ["@semos-labs/glyph@0.1.83", "", { "dependencies": { "react-reconciler": "^0.31.0", "string-width": "^7.2.0", "yoga-layout": "^3.2.1" }, "peerDependencies": { "react": "^18.0.0 || ^19.0.0" } }, "sha512-bTKRwA5p2o5T7RReTwvda1qqgX7x1ZJzfosn4QFGCgeBrvU66JJuL62RIF6y0wwDlLhEWTV5RZL3lYPgJKinBA=="],
+    "@semos-labs/glyph": ["@semos-labs/glyph@0.1.86", "", { "dependencies": { "react-reconciler": "^0.31.0", "string-width": "^7.2.0", "yoga-layout": "^3.2.1" }, "peerDependencies": { "react": "^18.0.0 || ^19.0.0" } }, "sha512-JegRX/7PcEyO9aIxFtEjbBvgO7lMYAjIsNmMBA6VK3Zd+edLZRjrfxs3+cYCUe/s2cqXeYPOj4alhU+KeO7SMQ=="],
 
     "@sindresorhus/is": ["@sindresorhus/is@4.6.0", "", {}, "sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw=="],
 
