@@ -31,6 +31,8 @@ import {
   replyAttachmentsAtom,
   draftIdAtom,
   signatureAtom,
+  gmailSignaturesAtom,
+  currentComposeSigAtom,
   inlineReplyOpenAtom,
   inlineReplyContentAtom,
   contactsAtom,
@@ -144,6 +146,92 @@ export const updateConfigAtom = atom(
   }
 );
 
+// ===== Gmail Signature Support =====
+
+/**
+ * Convert Gmail HTML signature to plain text.
+ * Handles common HTML elements: <br>, <div>, <p>, <a>, <b>, <i>, etc.
+ */
+function signatureHtmlToText(html: string): string {
+  if (!html || !html.trim()) return "";
+
+  let text = html;
+
+  // Replace <br> and <br/> with newlines
+  text = text.replace(/<br\s*\/?>/gi, "\n");
+
+  // Replace block elements with newlines
+  text = text.replace(/<\/(?:div|p|li|tr|h[1-6])>/gi, "\n");
+  text = text.replace(/<(?:div|p|li|tr|h[1-6])\b[^>]*>/gi, "");
+
+  // Extract link text with URL: <a href="url">text</a> → text (url)
+  text = text.replace(/<a\b[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/gi, (_, href, inner) => {
+    const linkText = inner.replace(/<[^>]*>/g, "").trim();
+    if (!linkText || linkText === href) return href;
+    return `${linkText} (${href})`;
+  });
+
+  // Strip all remaining HTML tags
+  text = text.replace(/<[^>]*>/g, "");
+
+  // Decode HTML entities
+  text = text.replace(/&nbsp;/gi, " ");
+  text = text.replace(/&amp;/gi, "&");
+  text = text.replace(/&lt;/gi, "<");
+  text = text.replace(/&gt;/gi, ">");
+  text = text.replace(/&quot;/gi, '"');
+  text = text.replace(/&#39;/gi, "'");
+  text = text.replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10)));
+
+  // Collapse multiple blank lines into at most one
+  text = text.replace(/\n{3,}/g, "\n\n");
+
+  // Trim trailing whitespace per line, and overall
+  text = text.split("\n").map(l => l.trimEnd()).join("\n").trim();
+
+  return text;
+}
+
+/**
+ * Fetch Gmail signatures for all logged-in accounts and store them.
+ */
+export const fetchSignaturesAtom = atom(null, async (get, set) => {
+  const accounts = get(googleAccountsAtom);
+  if (accounts.length === 0) return;
+
+  const sigs: Record<string, string> = {};
+
+  try {
+    const { listSendAs } = await import("../api/gmail.ts");
+
+    await Promise.all(
+      accounts.map(async (acc) => {
+        try {
+          const sendAsAliases = await listSendAs(acc.email);
+
+          // Pick the primary/default alias signature, falling back to the one matching the account email
+          const primary = sendAsAliases.find(a => a.isPrimary)
+            ?? sendAsAliases.find(a => a.sendAsEmail === acc.email)
+            ?? sendAsAliases[0];
+
+          if (primary?.signature) {
+            const plainText = signatureHtmlToText(primary.signature);
+            if (plainText) {
+              sigs[acc.email] = plainText;
+            }
+          }
+        } catch {
+          // Non-critical — account keeps using config/default signature
+        }
+      })
+    );
+
+    set(gmailSignaturesAtom, sigs);
+  } catch {
+    // Non-critical
+  }
+});
+
 // ===== Multi-Account Actions =====
 
 // Set the reply/compose "From" account by index
@@ -154,21 +242,65 @@ export const setReplyAccountAtom = atom(
     if (index < 0 || index >= accounts.length) return;
     set(replyFromAccountIndexAtom, index);
 
-    // Update signature if the new account has a per-account one
     const account = accounts[index];
-    if (account?.signature) {
-      set(signatureAtom, `\n${account.signature}`);
-    } else {
-      // Fall back to global signature
-      const config = get(configAtom);
-      if (config.signature.enabled) {
-        set(signatureAtom, `\n${config.signature.text}`);
-      } else {
-        set(signatureAtom, "");
-      }
+    if (!account) return;
+
+    // Resolve the new signature for this account (Gmail > per-account config > global config)
+    const newSigText = resolveSignatureForAccount(get, account.email);
+
+    // Update the global signatureAtom
+    set(signatureAtom, newSigText ? `\n${newSigText}` : "");
+
+    // Build the new signature block (with -- delimiter, unless already present)
+    let newSigBlock = "";
+    if (newSigText) {
+      newSigBlock = newSigText.startsWith("--") ? `\n${newSigText}` : `\n--\n${newSigText}`;
     }
+
+    // Swap the signature in the compose body
+    const oldSigBlock = get(currentComposeSigAtom);
+    const content = get(replyContentAtom);
+
+    if (oldSigBlock && content.endsWith(oldSigBlock)) {
+      // Replace old signature with new one
+      const userContent = content.slice(0, content.length - oldSigBlock.length);
+      set(replyContentAtom, userContent + newSigBlock);
+    } else if (!oldSigBlock && newSigBlock) {
+      // No previous signature — append new one
+      set(replyContentAtom, content + newSigBlock);
+    }
+    // If the user edited the signature area, don't override their changes
+
+    set(currentComposeSigAtom, newSigBlock);
   }
 );
+
+/**
+ * Resolve the best signature text for an account.
+ * Priority: Gmail signature > per-account config signature > global config signature
+ */
+function resolveSignatureForAccount(get: any, accountEmail: string): string {
+  // 1. Gmail signature (fetched from server)
+  const gmailSigs = get(gmailSignaturesAtom);
+  if (gmailSigs[accountEmail]) {
+    return gmailSigs[accountEmail];
+  }
+
+  // 2. Per-account config signature
+  const accounts = get(accountsAtom);
+  const account = accounts.find((a: any) => a.email === accountEmail);
+  if (account?.signature) {
+    return account.signature;
+  }
+
+  // 3. Global config signature
+  const config = get(configAtom);
+  if (config.signature.enabled) {
+    return config.signature.text;
+  }
+
+  return "";
+}
 
 // ===== Undo System =====
 const MAX_UNDO_STACK = 20;
@@ -1143,12 +1275,18 @@ export const openEmailAtom = atom(
   }
 );
 
-// Helper: get the signature for the current reply account
-function getAccountSignature(get: any): string {
+// Helper: get the signature block for the current reply account (with -- delimiter)
+function getAccountSignatureBlock(get: any): string {
   const account = get(replyFromAccountAtom);
-  if (account?.signature) return `\n${account.signature}`;
-  const sig = get(signatureAtom);
-  return sig || "";
+  if (!account) {
+    const sig = get(signatureAtom);
+    return sig || "";
+  }
+  const sigText = resolveSignatureForAccount(get, account.email);
+  if (!sigText) return "";
+  // Only prepend the -- delimiter if the signature doesn't already start with one
+  if (sigText.startsWith("--")) return `\n${sigText}`;
+  return `\n--\n${sigText}`;
 }
 
 // Reply to email - opens reply view
@@ -1162,14 +1300,15 @@ export const replyEmailAtom = atom(
     }
     // Set reply account to active account
     set(replyFromAccountIndexAtom, get(activeAccountIndexAtom));
-    const sig = getAccountSignature(get);
+    const sigBlock = getAccountSignatureBlock(get);
+    set(currentComposeSigAtom, sigBlock);
     set(draftIdAtom, `draft-${Date.now()}`);
     set(replyModeAtom, "reply");
     set(replyToAtom, formatEmailAddress(email.from));
     set(replyCcAtom, "");
     set(replyBccAtom, "");
     set(replySubjectAtom, `Re: ${email.subject}`);
-    set(replyContentAtom, sig ? `\n${sig}` : "");
+    set(replyContentAtom, sigBlock ? `\n${sigBlock}` : "");
     set(replyAttachmentsAtom, []);
     set(replyShowCcBccAtom, false);
     set(focusAtom, "reply");
@@ -1186,7 +1325,8 @@ export const replyAllEmailAtom = atom(
       return;
     }
     set(replyFromAccountIndexAtom, get(activeAccountIndexAtom));
-    const sig = getAccountSignature(get);
+    const sigBlock = getAccountSignatureBlock(get);
+    set(currentComposeSigAtom, sigBlock);
     set(draftIdAtom, `draft-${Date.now()}`);
     set(replyModeAtom, "replyAll");
     set(replyToAtom, formatEmailAddress(email.from));
@@ -1197,7 +1337,7 @@ export const replyAllEmailAtom = atom(
     set(replyCcAtom, allRecipients);
     set(replyBccAtom, "");
     set(replySubjectAtom, `Re: ${email.subject}`);
-    set(replyContentAtom, sig ? `\n${sig}` : "");
+    set(replyContentAtom, sigBlock ? `\n${sigBlock}` : "");
     set(replyAttachmentsAtom, []);
     set(replyShowCcBccAtom, true);
     set(focusAtom, "reply");
@@ -1249,6 +1389,7 @@ export const closeReplyAtom = atom(
     set(replyAttachmentsAtom, []);
     set(replyFullscreenAtom, false);
     set(replyShowCcBccAtom, false);
+    set(currentComposeSigAtom, "");
     set(focusAtom, "view");
   }
 );
@@ -1322,6 +1463,7 @@ export const sendReplyAtom = atom(
     set(replyAttachmentsAtom, []);
     set(replyFullscreenAtom, false);
     set(replyShowCcBccAtom, false);
+    set(currentComposeSigAtom, "");
     set(focusAtom, "view");
   }
 );
@@ -1470,14 +1612,15 @@ export const forwardEmailAtom = atom(
       return;
     }
     set(replyFromAccountIndexAtom, get(activeAccountIndexAtom));
-    const sig = getAccountSignature(get);
+    const sigBlock = getAccountSignatureBlock(get);
+    set(currentComposeSigAtom, sigBlock);
     set(draftIdAtom, `draft-${Date.now()}`);
     set(replyModeAtom, "forward");
     set(replyToAtom, "");
     set(replyCcAtom, "");
     set(replyBccAtom, "");
     set(replySubjectAtom, `Fwd: ${email.subject}`);
-    set(replyContentAtom, sig ? `\n${sig}` : "");
+    set(replyContentAtom, sigBlock ? `\n${sigBlock}` : "");
     set(replyAttachmentsAtom, []);
     set(replyShowCcBccAtom, false);
     set(focusAtom, "reply");
@@ -1489,14 +1632,15 @@ export const composeEmailAtom = atom(
   null,
   (get, set) => {
     set(replyFromAccountIndexAtom, get(activeAccountIndexAtom));
-    const sig = getAccountSignature(get);
+    const sigBlock = getAccountSignatureBlock(get);
+    set(currentComposeSigAtom, sigBlock);
     set(draftIdAtom, `draft-${Date.now()}`);
     set(replyModeAtom, "compose");
     set(replyToAtom, "");
     set(replyCcAtom, "");
     set(replyBccAtom, "");
     set(replySubjectAtom, "");
-    set(replyContentAtom, sig ? `\n${sig}` : "");
+    set(replyContentAtom, sigBlock ? `\n${sigBlock}` : "");
     set(replyAttachmentsAtom, []);
     set(replyShowCcBccAtom, false);
     set(focusAtom, "reply");
@@ -1593,8 +1737,8 @@ export const expandInlineReplyAtom = atom(
     // Open full reply with the content carried over
     set(replyEmailAtom);
     if (content.trim()) {
-      const sig = get(signatureAtom);
-      set(replyContentAtom, content + (sig ? `\n${sig}` : ""));
+      const sigBlock = get(currentComposeSigAtom);
+      set(replyContentAtom, content + sigBlock);
     }
   }
 );
@@ -2337,8 +2481,9 @@ export const loginAtom = atom(null, async (get, set) => {
       onHasMore: (hasMore) => set(hasMoreEmailsAtom, hasMore),
     });
 
-    // Fetch custom labels
+    // Fetch custom labels and Gmail signatures
     set(fetchUserLabelsAtom);
+    set(fetchSignaturesAtom);
   }
 });
 
@@ -2356,6 +2501,7 @@ export const logoutAtom = atom(null, async (get, set) => {
   set(isLoggedInAtom, false);
   set(emailsAtom, []);
   set(gmailLabelCountsAtom, {});
+  set(gmailSignaturesAtom, {});
   set(hasMoreEmailsAtom, false);
   set(userLabelsAtom, []);
   set(currentLabelAtom, "INBOX");
@@ -2435,8 +2581,9 @@ export const checkAuthAtom = atom(null, async (get, set) => {
         onHasMore: (hasMore) => set(hasMoreEmailsAtom, hasMore),
       });
 
-      // Fetch custom labels
+      // Fetch custom labels and Gmail signatures
       set(fetchUserLabelsAtom);
+      set(fetchSignaturesAtom);
     }
   } catch {
     // No accounts, that's fine

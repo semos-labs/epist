@@ -604,6 +604,28 @@ export async function listHistory(
   return await res.json() as HistoryResponse;
 }
 
+// ===== Send-As / Signatures =====
+
+export interface GmailSendAs {
+  sendAsEmail: string;
+  displayName: string;
+  signature: string; // HTML
+  isPrimary?: boolean;
+  isDefault?: boolean;
+  replyToAddress?: string;
+  treatAsAlias?: boolean;
+}
+
+/**
+ * List all send-as aliases for an account (includes signatures).
+ * Requires gmail.modify or gmail.settings.basic scope.
+ */
+export async function listSendAs(accountEmail: string): Promise<GmailSendAs[]> {
+  const res = await gmailFetch(accountEmail, "/settings/sendAs");
+  const data = await res.json() as { sendAs: GmailSendAs[] };
+  return data.sendAs || [];
+}
+
 // ===== Profile =====
 
 export interface GmailProfile {

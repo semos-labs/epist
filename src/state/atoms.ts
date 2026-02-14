@@ -207,8 +207,14 @@ export const replySubjectAtom = atom<string>("");
 export const replyContentAtom = atom<string>("");
 export const draftIdAtom = atom<string | null>(null);
 
-// Email signature
+// Email signature (local/config fallback)
 export const signatureAtom = atom<string>("\n--\nSent from Epist");
+
+// Gmail signatures fetched from the server (accountEmail → plain text signature)
+export const gmailSignaturesAtom = atom<Record<string, string>>({});
+
+// The signature block currently inserted in the compose body (for swapping on account toggle)
+export const currentComposeSigAtom = atom<string>("");
 
 // Quick inline reply (in email view, without full compose modal)
 export const inlineReplyOpenAtom = atom<boolean>(false);
