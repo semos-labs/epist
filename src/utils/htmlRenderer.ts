@@ -17,6 +17,8 @@ export interface LinePart {
   src?: string;
   /** For image: alt text */
   alt?: string;
+  /** For image in table lines: the character width the placeholder occupied in the table layout */
+  tableWidth?: number;
 }
 
 // ===== Link Detection =====
@@ -466,8 +468,8 @@ export const TABLE_CHARS_RE = /[│┌┐└┘├┤┬┴┼─]/;
  * Image placeholders (⬚⟪index⟫⟪alt⟫) are split out as separate image parts.
  * The index references the imageRegistry to get the actual src URL.
  *
- * Exception: if the line contains box-drawing table characters, images are
- * kept as text (alt text only) to preserve the table structure.
+ * For table lines (containing box-drawing characters), images get a `tableWidth`
+ * property so the renderer can pad them to preserve column alignment.
  */
 export function parseLineSegments(rawLine: string, imageRegistry: ImageRegistryEntry[]): LinePart[] {
   const clean = stripAnsi(rawLine);
@@ -476,6 +478,8 @@ export function parseLineSegments(rawLine: string, imageRegistry: ImageRegistryE
   if (!clean.includes("⬚⟪")) {
     return [{ type: "text", content: rawLine }];
   }
+
+  const isTableLine = TABLE_CHARS_RE.test(clean);
 
   // Line contains image(s) — work with clean text for reliable parsing
   const parts: LinePart[] = [];
@@ -503,6 +507,9 @@ export function parseLineSegments(rawLine: string, imageRegistry: ImageRegistryE
       content: alt,
       src,
       alt,
+      // For table lines, record the placeholder width so the renderer
+      // can pad the Image component to preserve column alignment.
+      tableWidth: isTableLine ? match[0].length : undefined,
     });
 
     lastIndex = matchIndex + match[0].length;

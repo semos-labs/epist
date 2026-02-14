@@ -738,7 +738,7 @@ function MessageContent({ email, linkIndexOffset, activeLinkIndex, viewFocused }
                           key={pi}
                           src={part.src}
                           placeholder={part.alt || "image"}
-                          style={{ border: "none" }}
+                          style={{ border: "none", width: part.tableWidth }}
                           autoLoad={false}
                           autoSize
                           maxHeight={2}
