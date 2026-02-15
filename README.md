@@ -17,8 +17,9 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/nick-skriabin/epist/releases/latest"><img src="https://img.shields.io/github/v/release/nick-skriabin/epist?label=Release&color=green" alt="Latest Release"></a>
+  <a href="https://github.com/nick-skriabin/epist/releases/latest"><img src="https://img.shields.io/github/downloads/nick-skriabin/epist/total?label=Downloads&color=blue" alt="Downloads"></a>
   <img src="https://img.shields.io/badge/Bun-1.0+-f9f1e1?logo=bun&logoColor=black" alt="Bun">
-  <a href="https://github.com/semos-labs/aion/releases/latest"><img src="https://img.shields.io/github/downloads/semos-labs/epist/total?label=Downloads&color=blue" alt="Downloads"></a>
   <img src="https://img.shields.io/badge/License-MIT-blue" alt="MIT License">
 </p>
 
@@ -74,10 +75,17 @@ Most email clients are mouse-driven, bloated, and slow. Epist takes a different 
 
 ## Quick Start
 
-### Option 1: Build from Source
+### Option 1: Homebrew (macOS/Linux)
 
 ```bash
-git clone https://github.com/nicholasrq/epist.git
+brew tap semos-labs/tap
+brew install epist
+```
+
+### Option 2: Build from Source
+
+```bash
+git clone https://github.com/nick-skriabin/epist.git
 cd epist
 bun install
 
@@ -440,10 +448,10 @@ You can override XDG paths with environment variables:
 - [x] Configurable theme & keybinds
 - [x] XDG Base Directory support
 - [x] Draft auto-save
+- [x] Homebrew distribution
 
 ### 📋 Planned
 
-- [ ] Homebrew distribution
 - [ ] Downloadable binaries
 - [ ] Offline mode improvements
 - [ ] Contact auto-complete
