@@ -23,6 +23,10 @@
   <img src="https://img.shields.io/badge/License-MIT-blue" alt="MIT License">
 </p>
 
+<p align="center">
+  <img src="screenshots/epist.jpg" alt="Epist in action" width="800">
+</p>
+
 ---
 
 ## Table of Contents
