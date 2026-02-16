@@ -78,7 +78,7 @@ Most email clients are mouse-driven, bloated, and slow. Epist takes a different 
 
 There are many great terminal email clients out there. Here's how Epist stacks up against the most popular ones:
 
-| Feature | Epist | NeoMutt | aerc | Himalaya | Alpine | meli |
+| Feature | Epist | [NeoMutt](https://neomutt.org) | [aerc](https://aerc-mail.org) | [Himalaya](https://github.com/pimalaya/himalaya) | [Alpine](https://alpineapp.email) | [meli](https://meli-email.org) |
 |---------|:-----:|:-------:|:----:|:--------:|:------:|:----:|
 | **Gmail OAuth (built-in)** | ✅ | ❌¹ | ⚠️² | ⚠️² | ❌ | ❌ |
 | **Setup complexity** | `brew install` + `:login` | Extensive `.muttrc` config | Moderate config files | Moderate config | Menu-driven setup | TOML config |
