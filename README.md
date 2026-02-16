@@ -28,6 +28,7 @@
 ## Table of Contents
 
 - [Why Epist?](#why-epist)
+- [How Epist Compares](#how-epist-compares)
 - [Quick Start](#quick-start)
 - [Keybindings](#keybindings)
   - [Email List](#email-list)
@@ -70,6 +71,38 @@ Most email clients are mouse-driven, bloated, and slow. Epist takes a different 
 | **💾 Local-First** | SQLite cache — your data stays yours, instant startup |
 | **🎨 Themeable** | Customize colors via TOML configuration |
 | **🚀 Fast** | Built with Bun and React — instant startup |
+
+---
+
+## How Epist Compares
+
+There are many great terminal email clients out there. Here's how Epist stacks up against the most popular ones:
+
+| Feature | Epist | NeoMutt | aerc | Himalaya | Alpine | meli |
+|---------|:-----:|:-------:|:----:|:--------:|:------:|:----:|
+| **Gmail OAuth (built-in)** | ✅ | ❌¹ | ⚠️² | ⚠️² | ❌ | ❌ |
+| **Setup complexity** | `brew install` + `:login` | Extensive `.muttrc` config | Moderate config files | Moderate config | Menu-driven setup | TOML config |
+| **Vim keybindings** | ✅ Out of the box | ✅ Customizable | ✅ Inspired | ❌ CLI only | ❌ Menu-driven | ⚠️ Partial |
+| **Two-column layout** | ✅ List + preview | ❌ Single pane | ❌ Single pane | ❌ CLI only | ❌ Single pane | ✅ |
+| **Thread view** | ✅ Navigate with `[`/`]` | ✅ | ✅ | ⚠️ Basic | ✅ | ✅ |
+| **Multi-account** | ✅ Easy switching | ✅ Complex config | ✅ | ✅ | ✅ | ✅ |
+| **Calendar invites (ICS)** | ✅ Parse + RSVP | ❌ | ⚠️ View only | ❌ | ❌ | ❌ |
+| **Local cache / offline** | ✅ SQLite | ⚠️ Header cache | ❌ | ❌ | ❌ | ⚠️ Maildir |
+| **Search** | ✅ Local + remote | ✅ With notmuch | ✅ | ✅ Basic | ✅ | ✅ With notmuch |
+| **Gmail labels & categories** | ✅ Colored dots | ⚠️ Via IMAP folders | ⚠️ Via IMAP folders | ⚠️ Via IMAP folders | ⚠️ Via IMAP folders | ⚠️ Via IMAP folders |
+| **Undo actions** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Command palette** | ✅ Fuzzy matching | ❌ | ✅ | ❌ | ❌ | ❌ |
+| **Inline quick reply** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Context-aware help** | ✅ Press `?` anywhere | ✅ | ❌ | ❌ | ✅ | ❌ |
+| **Bulk actions** | ✅ Select + act | ✅ Tag patterns | ✅ | ❌ | ✅ | ✅ |
+| **Themeable** | ✅ TOML config | ✅ `.muttrc` | ✅ `stylesets` | ❌ | ✅ Limited | ✅ Themes |
+| **Written in** | TypeScript (Bun) | C | Go | Rust | C | Rust |
+| **Protocol** | Gmail API | IMAP/POP3/SMTP | IMAP/SMTP/Notmuch | IMAP/SMTP | IMAP/POP3/SMTP | IMAP/Notmuch/Maildir |
+
+<sup>¹ Requires external helper scripts (e.g. `oauth2.py`) or app-specific passwords</sup><br>
+<sup>² Supports OAuth via external credential commands, requires manual setup</sup>
+
+> **TL;DR** — Epist is built for people who want a **modern, Gmail-first** terminal email experience with **zero friction**. No config files to write, no credential helpers to set up, no external tools to install. Just `brew install epist`, type `:login`, and you're reading email in seconds.
 
 ---
 
