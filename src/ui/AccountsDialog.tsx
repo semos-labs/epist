@@ -12,7 +12,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { Box, Text, Input, Portal, useInput } from "@semos-labs/glyph";
 import { useAtomValue, useSetAtom } from "jotai";
 import { accountsAtom, googleAccountsAtom, configAtom } from "../state/atoms.ts";
-import { popOverlayAtom, showMessageAtom, syncEmailsAtom, openAddAccountDialogAtom } from "../state/actions.ts";
+import { popOverlayAtom, showMessageAtom, syncEmailsAtom, disconnectAccountAtom, openAddAccountDialogAtom } from "../state/actions.ts";
 import {
   loadAccountSettings,
   setCustomAccountName,
@@ -43,6 +43,7 @@ export function AccountsDialog() {
   const popOverlay = useSetAtom(popOverlayAtom);
   const showMessage = useSetAtom(showMessageAtom);
   const sync = useSetAtom(syncEmailsAtom);
+  const disconnectAccount = useSetAtom(disconnectAccountAtom);
   const addAccount = useSetAtom(openAddAccountDialogAtom);
 
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -132,10 +133,14 @@ export function AccountsDialog() {
   const handleDeleteAccount = useCallback(async () => {
     if (!selectedAccount) return;
     try {
+      // Remove auth tokens (Gmail) or tell user about config.toml (IMAP)
       if (selectedAccount.provider === "gmail") {
         await removeAccount(selectedAccount.email);
       }
       await removeAccountSettings(selectedAccount.email);
+
+      // Clear all cached data (DB, FTS index, sync state, provider) for this account
+      await disconnectAccount(selectedAccount.email);
 
       if (selectedAccount.provider === "gmail") {
         const updatedAccounts = await getAccounts();
@@ -145,7 +150,6 @@ export function AccountsDialog() {
         } else {
           setSelectedIndex(i => Math.min(i, accounts.length - 2));
           showMessage({ text: `Removed ${selectedAccount.email}`, type: "success" });
-          sync();
         }
       } else {
         // IMAP account — tell user to remove from config.toml
@@ -159,7 +163,7 @@ export function AccountsDialog() {
       showMessage({ text: "Failed to remove account", type: "error" });
       setShowDeleteConfirm(false);
     }
-  }, [selectedAccount, accounts, popOverlay, showMessage, sync]);
+  }, [selectedAccount, accounts, popOverlay, showMessage, disconnectAccount]);
 
   // Test IMAP/SMTP connection
   const handleTestConnection = useCallback(async () => {

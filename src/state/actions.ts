@@ -2686,6 +2686,28 @@ export const openAddAccountDialogAtom = atom(null, (get, set) => {
   set(pushOverlayAtom, { kind: "addAccount" });
 });
 
+// Disconnect an account — clear all data from DB, cache, FTS index, and provider registry
+export const disconnectAccountAtom = atom(null, async (get, set, accountEmail: string) => {
+  const { clearAccount } = await import("../lib/sync.ts");
+  const { unregisterProvider } = await import("../api/provider.ts");
+
+  // Clear DB data (emails, sync state, label counts, user labels, FTS) + refresh in-memory emails
+  clearAccount(accountEmail);
+
+  // Remove the provider from the registry
+  unregisterProvider(accountEmail);
+
+  // Update the accounts list in state
+  const currentAccounts = get(googleAccountsAtom);
+  const updated = currentAccounts.filter(a => a.email !== accountEmail);
+  set(googleAccountsAtom, updated);
+  set(isLoggedInAtom, updated.length > 0);
+
+  // Refresh label counts from remaining data
+  const { getDbLabelCounts } = await import("../lib/database.ts");
+  set(gmailLabelCountsAtom, getDbLabelCounts());
+});
+
 // Manually trigger a sync refresh
 export const syncEmailsAtom = atom(null, async (get, set) => {
   const { manualSync } = await import("../lib/sync.ts");
