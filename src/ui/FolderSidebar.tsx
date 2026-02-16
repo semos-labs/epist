@@ -254,7 +254,7 @@ export function FolderSidebar() {
               value={accountFilter ?? "__all__"}
               onChange={handleAccountChange}
               style={{ width: 20, border: "none" } as any}
-              dropdownStyle={{ border: "none" } as any}
+              dropdownStyle={{ border: "none", bg: "#1a1a1a" } as any}
               focusedStyle={{ bg: "blackBright" }}
               highlightColor="cyan"
               maxVisible={accounts.length + 1}

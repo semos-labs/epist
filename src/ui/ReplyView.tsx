@@ -352,7 +352,7 @@ export function ReplyView() {
                   onChange={handleAccountChange}
                   placeholder="Select account"
                   style={{ width: inputWidth, border: "none" } as any}
-                  dropdownStyle={{ border: "none" } as any}
+                  dropdownStyle={{ border: "none", bg: "#1a1a1a" } as any}
                   focusedStyle={{ bg: "blackBright" }}
                   highlightColor="cyan"
                   maxVisible={5}

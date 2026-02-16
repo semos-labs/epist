@@ -76,7 +76,8 @@ export const KEYBIND_REGISTRY: Record<KeybindScope, KeybindDef[]> = {
     { key: "", display: "", description: "Login to Google", action: "login", command: "login" },
     { key: "", display: "", description: "Logout all accounts", action: "logout", command: "logout" },
     { key: "", display: "", description: "Manage accounts", action: "accounts", command: "profile" },
-    { key: "", display: "", description: "Sync emails from Google", action: "sync", command: "sync" },
+    { key: "", display: "", description: "Add IMAP/SMTP account", action: "addAccount", command: "add-account" },
+    { key: "", display: "", description: "Sync emails from server", action: "sync", command: "sync" },
     { key: "", display: "", description: "Clear cache & full resync", action: "resetSync", command: "reset-sync" },
   ],
 

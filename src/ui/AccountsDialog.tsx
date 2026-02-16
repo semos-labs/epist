@@ -12,7 +12,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { Box, Text, Input, Portal, useInput } from "@semos-labs/glyph";
 import { useAtomValue, useSetAtom } from "jotai";
 import { accountsAtom, googleAccountsAtom, configAtom } from "../state/atoms.ts";
-import { popOverlayAtom, showMessageAtom, syncEmailsAtom } from "../state/actions.ts";
+import { popOverlayAtom, showMessageAtom, syncEmailsAtom, openAddAccountDialogAtom } from "../state/actions.ts";
 import {
   loadAccountSettings,
   setCustomAccountName,
@@ -43,6 +43,7 @@ export function AccountsDialog() {
   const popOverlay = useSetAtom(popOverlayAtom);
   const showMessage = useSetAtom(showMessageAtom);
   const sync = useSetAtom(syncEmailsAtom);
+  const addAccount = useSetAtom(openAddAccountDialogAtom);
 
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [defaultEmail, setDefaultEmail] = useState<string | null>(null);
@@ -243,6 +244,7 @@ export function AccountsDialog() {
       else if (key.name === "n") handleStartEditName();
       else if (key.name === "d") setShowDeleteConfirm(true);
       else if (key.name === "t") handleTestConnection();
+      else if (key.name === "a") addAccount();
     });
     return null;
   }
@@ -271,8 +273,8 @@ export function AccountsDialog() {
             } as any}
           >
             <Text style={{ color: "blackBright" }}>
-              No accounts connected. Run ':login' to add a Gmail account, or add
-              IMAP accounts in config.toml.
+              No accounts connected. Run ':login' for Gmail, ':add-account' for
+              IMAP/SMTP, or press Esc and then 'a' to add one.
             </Text>
           </Box>
         </Box>
@@ -545,8 +547,8 @@ export function AccountsDialog() {
                 : showDeleteConfirm
                   ? "y:confirm  n:cancel"
                   : isImap
-                    ? "t:test  n:rename  p:primary  d:delete  Esc:close"
-                    : "n:rename  p:primary  d:delete  Esc:close"}
+                    ? "a:add  t:test  n:rename  p:primary  d:delete  Esc:close"
+                    : "a:add  n:rename  p:primary  d:delete  Esc:close"}
             </Text>
           </Box>
         </Box>

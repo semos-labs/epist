@@ -1031,6 +1031,9 @@ export const executeCommandAtom = atom(
       case "accounts":
         set(openAccountsDialogAtom);
         break;
+      case "addAccount":
+        set(openAddAccountDialogAtom);
+        break;
       case "sync":
         set(syncEmailsAtom);
         break;
@@ -2607,6 +2610,11 @@ export const logoutAtom = atom(null, async (get, set) => {
 // Open accounts dialog
 export const openAccountsDialogAtom = atom(null, (get, set) => {
   set(pushOverlayAtom, { kind: "accounts" as any });
+});
+
+// Open IMAP/SMTP account setup dialog
+export const openAddAccountDialogAtom = atom(null, (get, set) => {
+  set(pushOverlayAtom, { kind: "addAccount" });
 });
 
 // Manually trigger a sync refresh

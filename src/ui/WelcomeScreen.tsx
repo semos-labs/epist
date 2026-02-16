@@ -2,7 +2,7 @@ import React, { useMemo, useCallback } from "react";
 import { Box, Text, useApp, Keybind } from "@semos-labs/glyph";
 import { useAtomValue, useSetAtom } from "jotai";
 import { focusAtom, isAuthLoadingAtom } from "../state/atoms.ts";
-import { loginAtom, openCommandAtom, openHelpAtom } from "../state/actions.ts";
+import { loginAtom, openCommandAtom, openHelpAtom, openAddAccountDialogAtom } from "../state/actions.ts";
 
 const LOGO_ART = [
   "┌─────────────────────────────────────┐",
@@ -23,6 +23,7 @@ export function WelcomeScreen() {
   const login = useSetAtom(loginAtom);
   const openCommand = useSetAtom(openCommandAtom);
   const openHelp = useSetAtom(openHelpAtom);
+  const addAccount = useSetAtom(openAddAccountDialogAtom);
 
   const handleLogin = useCallback(() => {
     if (!isLoading) login();
@@ -49,6 +50,7 @@ export function WelcomeScreen() {
       {canHandleKeys && (
         <>
           <Keybind keypress="return" onPress={handleLogin} />
+          <Keybind keypress="i" onPress={() => addAccount()} />
           <Keybind keypress=":" onPress={() => openCommand()} />
           <Keybind keypress="?" onPress={() => openHelp()} />
           <Keybind keypress="q" onPress={() => exit()} />
@@ -74,8 +76,11 @@ export function WelcomeScreen() {
           <Text style={{ color: "cyan", bold: true }}>
             Press  Enter  to sign in with Google
           </Text>
+          <Text style={{ color: "blue", bold: true }}>
+            Press  i  to add an IMAP/SMTP account
+          </Text>
           <Box style={{ height: 1 }} />
-          <Text dim>or run  :login  from the command bar</Text>
+          <Text dim>or run  :add-account  /  :login  from the command bar</Text>
         </Box>
       )}
 
@@ -85,6 +90,7 @@ export function WelcomeScreen() {
       <Box style={{ flexDirection: "column", alignItems: "center" }}>
         <Text dim>───────────────────────────────</Text>
         <Box style={{ height: 1 }} />
+        <Text dim>  i  add IMAP/SMTP account</Text>
         <Text dim>  :  open command bar</Text>
         <Text dim>  ?  show help</Text>
         <Text dim>  q  quit</Text>

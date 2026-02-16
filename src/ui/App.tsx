@@ -10,6 +10,7 @@ import { AttachmentPicker } from "./AttachmentPicker.tsx";
 import { FolderSidebar } from "./FolderSidebar.tsx";
 import { MoveToFolderPicker } from "./MoveToFolderPicker.tsx";
 import { AccountsDialog } from "./AccountsDialog.tsx";
+import { ImapSetupDialog } from "./ImapSetupDialog.tsx";
 import { WelcomeScreen } from "./WelcomeScreen.tsx";
 import { overlayStackAtom, currentLabelAtom, focusAtom, hasOverlayAtom, isReplyingAtom, folderSidebarOpenAtom, isLoggedInAtom } from "../state/atoms.ts";
 import { toggleFolderSidebarAtom, loadConfigAtom, checkAuthAtom } from "../state/actions.ts";
@@ -48,6 +49,8 @@ function OverlayRenderer() {
             return <MoveToFolderPicker key={`move-${index}`} />;
           case "accounts":
             return <AccountsDialog key={`accounts-${index}`} />;
+          case "addAccount":
+            return <ImapSetupDialog key={`add-account-${index}`} />;
           default:
             return null;
         }

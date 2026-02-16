@@ -16,7 +16,7 @@ export type FocusContext =
   | "reply";    // Reply to email
 
 // ===== Overlay Types =====
-export type OverlayKind = "help" | "compose" | "confirm" | "moveToFolder" | "accounts";
+export type OverlayKind = "help" | "compose" | "confirm" | "moveToFolder" | "accounts" | "addAccount";
 
 export interface Overlay {
   kind: OverlayKind;
