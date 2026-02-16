@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="screenshots/epist.jpg" alt="Epist in action" width="800">
+  <img src="images/epist.jpg" alt="Epist in action" width="800">
 </p>
 
 <p align="center">
