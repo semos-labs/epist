@@ -28,6 +28,8 @@ interface ServerPreset {
 }
 
 const KNOWN_PROVIDERS: Record<string, ServerPreset> = {
+  "gmail.com":      { imap: { host: "imap.gmail.com",        port: 993, security: "tls" }, smtp: { host: "smtp.gmail.com",        port: 587, security: "starttls" } },
+  "googlemail.com": { imap: { host: "imap.gmail.com",        port: 993, security: "tls" }, smtp: { host: "smtp.gmail.com",        port: 587, security: "starttls" } },
   "outlook.com":    { imap: { host: "outlook.office365.com", port: 993, security: "tls" }, smtp: { host: "smtp.office365.com", port: 587, security: "starttls" } },
   "hotmail.com":    { imap: { host: "outlook.office365.com", port: 993, security: "tls" }, smtp: { host: "smtp.office365.com", port: 587, security: "starttls" } },
   "live.com":       { imap: { host: "outlook.office365.com", port: 993, security: "tls" }, smtp: { host: "smtp.office365.com", port: 587, security: "starttls" } },
