@@ -10,6 +10,10 @@
 </p>
 
 <p align="center">
+  <img src="screenshots/epist.jpg" alt="Epist in action" width="800">
+</p>
+
+<p align="center">
   <a href="#quick-start">Quick Start</a> •
   <a href="#keybindings">Keybindings</a> •
   <a href="#commands">Commands</a> •
@@ -21,10 +25,6 @@
   <a href="https://github.com/nick-skriabin/epist/releases/latest"><img src="https://img.shields.io/github/downloads/nick-skriabin/epist/total?label=Downloads&color=blue" alt="Downloads"></a>
   <img src="https://img.shields.io/badge/Bun-1.0+-f9f1e1?logo=bun&logoColor=black" alt="Bun">
   <img src="https://img.shields.io/badge/License-MIT-blue" alt="MIT License">
-</p>
-
-<p align="center">
-  <img src="screenshots/epist.jpg" alt="Epist in action" width="800">
 </p>
 
 ---
