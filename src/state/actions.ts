@@ -77,6 +77,7 @@ import {
   isSearchingRemoteAtom,
   accountFilterAtom,
   userLabelsAtom,
+  listVisibleCountAtom,
   type FocusContext,
   type Overlay,
   type MessageType,
@@ -352,7 +353,7 @@ export const undoAtom = atom(
 // Move thread selection up/down
 export const moveSelectionAtom = atom(
   null,
-  (get, set, direction: "up" | "down" | "first" | "last") => {
+  (get, set, direction: "up" | "down" | "first" | "last" | "halfPageUp" | "halfPageDown") => {
     const threads = get(filteredThreadsAtom);
     const currentIndex = get(selectedIndexAtom);
     
@@ -366,6 +367,16 @@ export const moveSelectionAtom = atom(
       case "down":
         newIndex = Math.min(threads.length - 1, currentIndex + 1);
         break;
+      case "halfPageUp": {
+        const half = Math.max(1, Math.floor(get(listVisibleCountAtom) / 2));
+        newIndex = Math.max(0, currentIndex - half);
+        break;
+      }
+      case "halfPageDown": {
+        const half = Math.max(1, Math.floor(get(listVisibleCountAtom) / 2));
+        newIndex = Math.min(threads.length - 1, currentIndex + half);
+        break;
+      }
       case "first":
         newIndex = 0;
         break;
@@ -1107,8 +1118,10 @@ export const executeCommandAtom = atom(
 
 // ===== Search Actions =====
 
-// Debounce timer for remote search
+// Debounce timers for search
+let _localSearchTimer: ReturnType<typeof setTimeout> | null = null;
 let _searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+const LOCAL_SEARCH_DEBOUNCE_MS = 80; // just enough to let the input breathe
 const SEARCH_DEBOUNCE_MS = 500;
 
 // Search Gmail API for all logged-in accounts
@@ -1165,33 +1178,36 @@ export const searchRemoteAtom = atom(
   }
 );
 
-// Update search query — local FTS is instant, remote is debounced
+// Update search query — both local and remote searches are debounced to keep the input snappy.
+// Local FTS is very short (80ms) so results feel near-instant; remote is longer (500ms).
 export const updateSearchQueryAtom = atom(
   null,
   (get, set, query: string) => {
     set(searchQueryAtom, query);
-    set(searchSelectedIndexAtom, 0);
 
-    // Run local FTS5 search immediately (synchronous, sub-ms on thousands of emails)
+    // Debounce local FTS search — keeps the input responsive by deferring
+    // the FTS query + result atom updates (which cascade to EmailList re-renders)
+    if (_localSearchTimer) clearTimeout(_localSearchTimer);
     if (query.trim()) {
-      try {
-        const accountFilter = get(accountFilterAtom);
-        const results = searchLocalFTS(query, {
-          accountEmail: accountFilter || undefined,
-        });
-        set(searchLocalResultsAtom, results);
-      } catch {
-        // FTS failure is non-critical, clear results
-        set(searchLocalResultsAtom, []);
-      }
+      _localSearchTimer = setTimeout(() => {
+        try {
+          const accountFilter = get(accountFilterAtom);
+          const results = searchLocalFTS(query, {
+            accountEmail: accountFilter || undefined,
+          });
+          set(searchLocalResultsAtom, results);
+        } catch {
+          set(searchLocalResultsAtom, []);
+        }
+
+        // Update selection to first matching thread
+        const threads = get(filteredThreadsAtom);
+        if (threads.length > 0) {
+          set(selectedThreadIdAtom, threads[0]!.id);
+        }
+      }, LOCAL_SEARCH_DEBOUNCE_MS);
     } else {
       set(searchLocalResultsAtom, []);
-    }
-    
-    // Update selection to first matching thread
-    const threads = get(filteredThreadsAtom);
-    if (threads.length > 0) {
-      set(selectedThreadIdAtom, threads[0]!.id);
     }
 
     // Debounce remote search
@@ -1212,6 +1228,7 @@ export const updateSearchQueryAtom = atom(
 export const closeSearchAtom = atom(
   null,
   (get, set) => {
+    if (_localSearchTimer) clearTimeout(_localSearchTimer);
     if (_searchDebounceTimer) clearTimeout(_searchDebounceTimer);
     set(focusAtom, "list");
     set(searchQueryAtom, "");

@@ -194,6 +194,9 @@ export const messageVisibleAtom = atom<boolean>(true);
 // Scroll offset for email list
 export const listScrollOffsetAtom = atom<number>(0);
 
+// How many threads are visible in the list (set by EmailList on layout)
+export const listVisibleCountAtom = atom<number>(10);
+
 // Scroll offset for email view (ScrollView clamps internally)
 export const viewScrollOffsetAtom = atom<number>(0);
 
@@ -325,36 +328,41 @@ export const isReplyingAtom = atom((get) => get(replyModeAtom) !== null);
 export const filteredEmailsAtom = atom((get) => {
   const emails = get(emailsAtom);
   const label = get(currentLabelAtom);
-  const searchQuery = get(searchQueryAtom);
   const focus = get(focusAtom);
   const accountFilter = get(accountFilterAtom);
   
   // In search mode: combine local FTS5 results + remote results (ignore label filter)
-  if (focus === "search" && searchQuery.trim()) {
+  // NOTE: we intentionally do NOT depend on searchQueryAtom here — that would cause
+  // the entire email list to re-render on every keystroke. Instead we check whether
+  // any search results exist, which only changes when the debounced FTS/remote
+  // searches actually produce new data.
+  if (focus === "search") {
     const localResults = get(searchLocalResultsAtom);
     const remoteResults = get(searchRemoteResultsAtom);
     
-    // Combine local + remote, dedup by ID (local first — they're ranked by relevance)
-    const seen = new Set<string>();
-    const combined: Email[] = [];
-    
-    for (const e of localResults) {
-      if (!seen.has(e.id)) {
-        if (accountFilter && e.accountEmail !== accountFilter) continue;
-        seen.add(e.id);
-        combined.push(e);
+    if (localResults.length > 0 || remoteResults.length > 0) {
+      // Combine local + remote, dedup by ID (local first — they're ranked by relevance)
+      const seen = new Set<string>();
+      const combined: Email[] = [];
+      
+      for (const e of localResults) {
+        if (!seen.has(e.id)) {
+          if (accountFilter && e.accountEmail !== accountFilter) continue;
+          seen.add(e.id);
+          combined.push(e);
+        }
       }
-    }
-    
-    for (const e of remoteResults) {
-      if (!seen.has(e.id)) {
-        if (accountFilter && e.accountEmail !== accountFilter) continue;
-        seen.add(e.id);
-        combined.push(e);
+      
+      for (const e of remoteResults) {
+        if (!seen.has(e.id)) {
+          if (accountFilter && e.accountEmail !== accountFilter) continue;
+          seen.add(e.id);
+          combined.push(e);
+        }
       }
+      
+      return combined;
     }
-    
-    return combined;
   }
   
   let filtered = emails.filter(e => e.labelIds.includes(label));
@@ -370,10 +378,24 @@ export const filteredEmailsAtom = atom((get) => {
   );
 });
 
-// Threads grouped from filtered emails
+// Threads grouped from filtered emails.
+// In normal (non-search) mode: unread threads first, then read — both groups sorted by recency.
+// In search mode: preserve FTS relevance ranking as-is.
 export const filteredThreadsAtom = atom((get) => {
   const emails = get(filteredEmailsAtom);
-  return groupIntoThreads(emails);
+  const threads = groupIntoThreads(emails);
+  const focus = get(focusAtom);
+
+  // In search mode, keep FTS ranking order
+  if (focus === "search") return threads;
+
+  // Partition into unread-first, then read — both sorted by date (already are from groupIntoThreads)
+  const unread: typeof threads = [];
+  const read: typeof threads = [];
+  for (const t of threads) {
+    (t.hasUnread ? unread : read).push(t);
+  }
+  return [...unread, ...read];
 });
 
 // Selected thread ID (we select threads, not individual emails)

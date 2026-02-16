@@ -534,7 +534,29 @@ function buildFtsMatch(filters: SearchFilters): string | null {
 /**
  * Search the local email cache using FTS5 full-text search.
  *
- * Returns Email objects ranked by relevance (BM25).
+ * Ranking: BM25 with custom column weights × recency boost.
+ *
+ * Column weights (higher = more important when matched):
+ *   subject: 10.0  — subject matches are the strongest signal
+ *   body: 1.0      — body is large, so per-token weight is low
+ *   from_name: 5.0  — who sent it matters a lot
+ *   from_email: 3.0 — email address match
+ *   to_addresses: 2.0
+ *   cc_addresses: 1.0
+ *   bcc_addresses: 1.0
+ *
+ * Recency boost: half-life decay with a capped max boost.
+ * Formula: 1 + cap × 2^(-days_old / half_life)
+ *   cap = 0.5 (max 1.5× boost — strong old matches aren't buried by weak new ones)
+ *   half_life = 14 days (boost halves every 2 weeks)
+ *
+ *   Today:      1.5× boost
+ *   7 days:     1.35×
+ *   14 days:    1.25× (half-life)
+ *   28 days:    1.125×
+ *   60 days:    ~1.03×
+ *   365 days:   ~1.0× (effectively no boost)
+ *
  * Handles both text-based filters (via FTS5 MATCH) and structured filters
  * (has:, is:, label:, after:, before:) via post-filtering.
  */
@@ -550,6 +572,15 @@ export function searchLocalFTS(
 
   const sqlite = getSqlite();
 
+  // BM25 with column weights:   subj  body  from_n from_e to    cc    bcc
+  const rankExpr = `bm25(emails_fts, 10.0, 1.0, 5.0, 3.0, 2.0, 1.0, 1.0)`;
+  // Recency boost: half-life decay, capped so relevance always dominates.
+  // BM25 is negative (more negative = better), so multiplying by >1 for
+  // recent emails makes them rank higher — but the cap (0.5) ensures a
+  // strong old match can never be buried by a weak recent one.
+  // Formula: 1 + 0.5 × exp(-days_old × ln(2) / 14)  i.e. 2^(-days/14)
+  const recencyBoost = `(1.0 + 0.5 * exp(-MAX(0, julianday('now') - julianday(e.date)) * 0.0495105))`;
+
   let sqlQuery: string;
   let params: (string | number)[];
 
@@ -559,7 +590,7 @@ export function searchLocalFTS(
       FROM emails_fts fts
       JOIN emails e ON e.id = fts.email_id
       WHERE emails_fts MATCH ? AND fts.account_email = ?
-      ORDER BY fts.rank
+      ORDER BY ${rankExpr} * ${recencyBoost}
       LIMIT ?
     `;
     params = [matchExpr, accountEmail, limit];
@@ -569,7 +600,7 @@ export function searchLocalFTS(
       FROM emails_fts fts
       JOIN emails e ON e.id = fts.email_id
       WHERE emails_fts MATCH ?
-      ORDER BY fts.rank
+      ORDER BY ${rankExpr} * ${recencyBoost}
       LIMIT ?
     `;
     params = [matchExpr, limit];

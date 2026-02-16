@@ -39,6 +39,8 @@ export const KEYBIND_REGISTRY: Record<KeybindScope, KeybindDef[]> = {
     { key: "down", display: "j / ↓", description: "Next email", action: "nextEmail" },
     { key: "k", display: "k / ↑", description: "Previous email", action: "prevEmail" },
     { key: "up", display: "k / ↑", description: "Previous email", action: "prevEmail" },
+    { key: "ctrl+d", display: "Ctrl+d", description: "Half page down", action: "halfPageDown" },
+    { key: "ctrl+u", display: "Ctrl+u", description: "Half page up", action: "halfPageUp" },
     { key: "shift+g", display: "G", description: "Last email", action: "lastEmail" },
     { key: "g", display: "gg", description: "First email", action: "firstEmail" },
 

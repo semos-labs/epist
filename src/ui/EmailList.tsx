@@ -16,6 +16,7 @@ import {
   folderSidebarOpenAtom,
   hasMoreEmailsAtom,
   isSyncingAtom,
+  listVisibleCountAtom,
 } from "../state/atoms.ts";
 import {
   moveSelectionAtom,
@@ -167,6 +168,8 @@ function ListKeybinds() {
     // Navigation
     nextEmail: () => moveSelection("down"),
     prevEmail: () => moveSelection("up"),
+    halfPageDown: () => moveSelection("halfPageDown"),
+    halfPageUp: () => moveSelection("halfPageUp"),
     lastEmail: () => moveSelection("last"),
     firstEmail: () => {
       const now = Date.now();
@@ -235,6 +238,10 @@ export function EmailList() {
   const listWidth = Math.min(60, Math.max(30, Math.floor(terminalWidth * 0.4)));
   const availableLines = terminalHeight - 4;
   const visibleCount = Math.floor((availableLines + 1) / 3);
+
+  // Keep the atom in sync so moveSelectionAtom can compute half-page jumps
+  const setVisibleCount = useSetAtom(listVisibleCountAtom);
+  React.useEffect(() => { setVisibleCount(visibleCount); }, [visibleCount, setVisibleCount]);
   
   React.useEffect(() => {
     if (selectedIndex >= 0) {
@@ -272,16 +279,29 @@ export function EmailList() {
             <Text dim>No emails</Text>
           </Box>
         ) : (
-          visibleThreads.map((thread, index) => (
-            <ThreadItem
-              key={thread.id}
-              thread={thread}
-              isSelected={thread.id === selectedThreadId}
-              isFocused={isFocused}
-              isLast={index === visibleThreads.length - 1}
-              isBulkSelected={bulkSelectedIds.has(thread.id)}
-            />
-          ))
+          visibleThreads.map((thread, index) => {
+            // Show separator between last unread and first read thread
+            const prevThread = index > 0 ? visibleThreads[index - 1] : 
+              (scrollOffset > 0 ? threads[scrollOffset + index - 1] : undefined);
+            const showSeparator = prevThread?.hasUnread && !thread.hasUnread;
+
+            return (
+              <React.Fragment key={thread.id}>
+                {showSeparator && (
+                  <Box style={{ flexDirection: "row", alignItems: "center", paddingY: 0 }}>
+                    <Text dim>{"─".repeat(listWidth - 4)}</Text>
+                  </Box>
+                )}
+                <ThreadItem
+                  thread={thread}
+                  isSelected={thread.id === selectedThreadId}
+                  isFocused={isFocused}
+                  isLast={index === visibleThreads.length - 1}
+                  isBulkSelected={bulkSelectedIds.has(thread.id)}
+                />
+              </React.Fragment>
+            );
+          })
         )}
       </Box>
       

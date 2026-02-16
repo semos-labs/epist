@@ -8,7 +8,6 @@ import {
   selectedEmailAtom,
   messageAtom,
   messageVisibleAtom,
-  searchQueryAtom,
   currentLabelAtom,
   isLoggedInAtom,
   isAuthLoadingAtom,
@@ -139,9 +138,8 @@ function CommandInput() {
   );
 }
 
-// Search input component
+// Search input component (uncontrolled — avoids re-renders from atom updates clobbering the cursor)
 function SearchInput() {
-  const query = useAtomValue(searchQueryAtom);
   const updateQuery = useSetAtom(updateSearchQueryAtom);
   const closeSearch = useSetAtom(closeSearchAtom);
   const moveSelection = useSetAtom(moveSelectionAtom);
@@ -176,7 +174,7 @@ function SearchInput() {
         <Text style={{ color: "cyan", bold: true }}>/</Text>
         <Input
           key="search-input"
-          value={query}
+          defaultValue=""
           placeholder="Search... (from: to: has:attachment is:unread after: before:)"
           onChange={updateQuery}
           onKeyPress={handleKeyPress}
