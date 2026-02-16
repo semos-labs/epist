@@ -1,6 +1,5 @@
 import { atom } from "jotai";
 import { groupIntoThreads, type Email, type LabelId } from "../domain/email.ts";
-import { parseSearchQuery, matchesSearch } from "../utils/searchParser.ts";
 import { type EpistConfig, type AccountConfig, getDefaultConfig } from "../utils/config.ts";
 
 import type { AccountInfo } from "../auth/tokens.ts";
@@ -155,6 +154,9 @@ export const searchQueryAtom = atom<string>("");
 
 // Search results (email IDs)
 export const searchResultsAtom = atom<string[]>([]);
+
+// Local FTS5 search results (from SQLite full-text index)
+export const searchLocalResultsAtom = atom<Email[]>([]);
 
 // Remote search results (emails fetched from Gmail API)
 export const searchRemoteResultsAtom = atom<Email[]>([]);
@@ -327,18 +329,17 @@ export const filteredEmailsAtom = atom((get) => {
   const focus = get(focusAtom);
   const accountFilter = get(accountFilterAtom);
   
-  // In search mode: search across ALL local emails + remote results (ignore label filter)
+  // In search mode: combine local FTS5 results + remote results (ignore label filter)
   if (focus === "search" && searchQuery.trim()) {
-    const filters = parseSearchQuery(searchQuery);
+    const localResults = get(searchLocalResultsAtom);
     const remoteResults = get(searchRemoteResultsAtom);
     
-    // Combine local + remote, dedup by ID
+    // Combine local + remote, dedup by ID (local first — they're ranked by relevance)
     const seen = new Set<string>();
     const combined: Email[] = [];
     
-    for (const e of emails) {
-      if (!seen.has(e.id) && matchesSearch(e, filters)) {
-        // Apply account filter even in search mode
+    for (const e of localResults) {
+      if (!seen.has(e.id)) {
         if (accountFilter && e.accountEmail !== accountFilter) continue;
         seen.add(e.id);
         combined.push(e);
@@ -353,9 +354,7 @@ export const filteredEmailsAtom = atom((get) => {
       }
     }
     
-    return combined.sort((a, b) => 
-      new Date(b.date).getTime() - new Date(a.date).getTime()
-    );
+    return combined;
   }
   
   let filtered = emails.filter(e => e.labelIds.includes(label));

@@ -3,6 +3,10 @@
  *
  * Uses Bun's built-in bun:sqlite as the driver.
  * Stored at $XDG_DATA_HOME/epist/emails.db
+ *
+ * Full-text search is powered by SQLite FTS5 (built into bun:sqlite).
+ * The emails_fts virtual table indexes subject, body, from, to, cc, bcc
+ * and is kept in sync automatically on every upsert/delete.
  */
 
 import { Database } from "bun:sqlite";
@@ -12,7 +16,9 @@ import { join } from "path";
 import { EPIST_DATA_DIR, ensureDirectories } from "./paths.ts";
 import { emails, syncState, labelCounts, userLabels } from "./schema.ts";
 import type { Email, LabelId } from "../domain/email.ts";
+import { parseSearchQuery, type SearchFilters } from "../utils/searchParser.ts";
 import { apiLogger } from "./logger.ts";
+import { load as cheerioLoad } from "cheerio";
 
 const DB_PATH = join(EPIST_DATA_DIR, "emails.db");
 
@@ -78,7 +84,111 @@ function getDb() {
   `);
   _sqlite.run(`CREATE INDEX IF NOT EXISTS idx_user_labels_account ON user_labels(account_email)`);
 
+  // ===== FTS5 Full-Text Search Index =====
+  _sqlite.run(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS emails_fts USING fts5(
+      subject,
+      body,
+      from_name,
+      from_email,
+      to_addresses,
+      cc_addresses,
+      bcc_addresses,
+      email_id UNINDEXED,
+      account_email UNINDEXED,
+      tokenize='unicode61 remove_diacritics 2'
+    )
+  `);
+
+  // Backfill FTS index for existing emails (runs once after migration)
+  const emailCount = _sqlite.prepare("SELECT COUNT(*) as c FROM emails").get() as { c: number } | null;
+  const ftsCount = _sqlite.prepare("SELECT COUNT(*) as c FROM emails_fts").get() as { c: number } | null;
+  if ((emailCount?.c ?? 0) > 0 && (ftsCount?.c ?? 0) === 0) {
+    apiLogger.info("Backfilling FTS5 index for existing emails...");
+    _rebuildFtsIndex(_sqlite);
+    apiLogger.info("FTS5 backfill complete");
+  }
+
   return _db;
+}
+
+// ===== FTS5 Helpers =====
+
+/** Get the raw SQLite handle (must be called after getDb) */
+function getSqlite(): Database {
+  if (!_sqlite) getDb();
+  return _sqlite!;
+}
+
+/**
+ * Extract clean text from HTML email body using cheerio.
+ * Strips tags, style/script blocks, and collapses whitespace.
+ */
+function htmlToSearchableText(html: string): string {
+  if (!html) return "";
+  try {
+    const $ = cheerioLoad(html);
+    // Remove elements that are pure noise for search
+    $("style, script, link, meta, head, img, svg").remove();
+    // Get text content, cheerio collapses inline elements nicely
+    return $.text().replace(/\s+/g, " ").trim();
+  } catch {
+    return "";
+  }
+}
+
+/** Extract searchable fields from an Email for FTS5 indexing */
+function extractFtsFields(email: Email) {
+  const toAddrs = (email.to || []).map(a => [a.name || "", a.email].join(" ")).join(" ");
+  const ccAddrs = (email.cc || []).map(a => [a.name || "", a.email].join(" ")).join(" ");
+  const bccAddrs = (email.bcc || []).map(a => [a.name || "", a.email].join(" ")).join(" ");
+
+  // Prefer HTML-extracted text (most emails are HTML-only or have richer HTML content),
+  // fall back to plain text body
+  const bodyText = email.bodyHtml
+    ? htmlToSearchableText(email.bodyHtml)
+    : (email.body || "");
+
+  return {
+    subject: email.subject || "",
+    body: bodyText,
+    from_name: email.from?.name || "",
+    from_email: email.from?.email || "",
+    to_addresses: toAddrs,
+    cc_addresses: ccAddrs,
+    bcc_addresses: bccAddrs,
+    email_id: email.id,
+    account_email: email.accountEmail || "",
+  };
+}
+
+/** Insert a single email into the FTS5 index */
+function insertFtsEntry(sqlite: Database, email: Email): void {
+  const f = extractFtsFields(email);
+  sqlite.run(
+    `INSERT INTO emails_fts (subject, body, from_name, from_email, to_addresses, cc_addresses, bcc_addresses, email_id, account_email)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [f.subject, f.body, f.from_name, f.from_email, f.to_addresses, f.cc_addresses, f.bcc_addresses, f.email_id, f.account_email],
+  );
+}
+
+/** Rebuild the entire FTS5 index from the emails table */
+function _rebuildFtsIndex(sqlite: Database): void {
+  sqlite.run("DELETE FROM emails_fts");
+  const rows = sqlite.prepare("SELECT data FROM emails").all() as { data: string }[];
+  for (const row of rows) {
+    try {
+      const email = JSON.parse(row.data) as Email;
+      insertFtsEntry(sqlite, email);
+    } catch {
+      // Skip malformed rows
+    }
+  }
+}
+
+/** Escape a term for FTS5 MATCH syntax (double-quote wrapping) */
+function escapeFts5Term(term: string): string {
+  return term.replace(/"/g, '""');
 }
 
 // ===== Email CRUD =====
@@ -86,6 +196,8 @@ function getDb() {
 /** Upsert a batch of emails into the local cache */
 export function upsertEmails(emailList: Email[]): void {
   const db = getDb();
+  const sqlite = getSqlite();
+
   for (const email of emailList) {
     db.insert(emails)
       .values({
@@ -109,6 +221,10 @@ export function upsertEmails(emailList: Email[]): void {
         },
       })
       .run();
+
+    // Keep FTS5 index in sync
+    sqlite.run("DELETE FROM emails_fts WHERE email_id = ?", [email.id]);
+    insertFtsEntry(sqlite, email);
   }
 }
 
@@ -177,7 +293,12 @@ export function getCachedEmail(id: string): Email | null {
 export function removeCachedEmails(ids: string[]): void {
   if (ids.length === 0) return;
   const db = getDb();
+  const sqlite = getSqlite();
   db.delete(emails).where(inArray(emails.id, ids)).run();
+  // Clean up FTS5 index
+  for (const id of ids) {
+    sqlite.run("DELETE FROM emails_fts WHERE email_id = ?", [id]);
+  }
 }
 
 /** Update label_ids for a cached email (optimistic local update) */
@@ -370,24 +491,186 @@ export function getCachedUserLabels(accountEmail?: string): CachedUserLabel[] {
     .map(r => ({ id: r.id, name: r.name, color: r.color, accountEmail: r.accountEmail }));
 }
 
+// ===== Full-Text Search =====
+
+/**
+ * Build an FTS5 MATCH expression from parsed search filters.
+ *
+ * Maps structured filters to FTS5 column-scoped queries:
+ *   freeText  → all indexed columns (implicit)
+ *   from:     → {from_name from_email}
+ *   to:       → {to_addresses}
+ *   subject:  → {subject}
+ *
+ * Non-text filters (has:, is:, label:, after:, before:) are handled
+ * via post-filtering on the returned Email objects.
+ */
+function buildFtsMatch(filters: SearchFilters): string | null {
+  const parts: string[] = [];
+
+  for (const term of filters.freeText) {
+    if (!term.trim()) continue;
+    parts.push(`"${escapeFts5Term(term)}" *`);
+  }
+
+  for (const f of filters.from) {
+    if (!f.trim()) continue;
+    parts.push(`{from_name from_email} : "${escapeFts5Term(f)}" *`);
+  }
+
+  for (const t of filters.to) {
+    if (!t.trim()) continue;
+    parts.push(`{to_addresses} : "${escapeFts5Term(t)}" *`);
+  }
+
+  for (const s of filters.subject) {
+    if (!s.trim()) continue;
+    parts.push(`{subject} : "${escapeFts5Term(s)}" *`);
+  }
+
+  return parts.length > 0 ? parts.join(" AND ") : null;
+}
+
+/**
+ * Search the local email cache using FTS5 full-text search.
+ *
+ * Returns Email objects ranked by relevance (BM25).
+ * Handles both text-based filters (via FTS5 MATCH) and structured filters
+ * (has:, is:, label:, after:, before:) via post-filtering.
+ */
+export function searchLocalFTS(
+  query: string,
+  options: { accountEmail?: string; limit?: number } = {},
+): Email[] {
+  const { accountEmail, limit = 200 } = options;
+  const filters = parseSearchQuery(query);
+  const matchExpr = buildFtsMatch(filters);
+
+  if (!matchExpr) return [];
+
+  const sqlite = getSqlite();
+
+  let sqlQuery: string;
+  let params: (string | number)[];
+
+  if (accountEmail) {
+    sqlQuery = `
+      SELECT e.data
+      FROM emails_fts fts
+      JOIN emails e ON e.id = fts.email_id
+      WHERE emails_fts MATCH ? AND fts.account_email = ?
+      ORDER BY fts.rank
+      LIMIT ?
+    `;
+    params = [matchExpr, accountEmail, limit];
+  } else {
+    sqlQuery = `
+      SELECT e.data
+      FROM emails_fts fts
+      JOIN emails e ON e.id = fts.email_id
+      WHERE emails_fts MATCH ?
+      ORDER BY fts.rank
+      LIMIT ?
+    `;
+    params = [matchExpr, limit];
+  }
+
+  try {
+    const rows = sqlite.prepare(sqlQuery).all(...params) as { data: string }[];
+    let results = rows.map(r => JSON.parse(r.data) as Email);
+
+    // Post-filter for non-text filters that FTS5 can't handle
+    results = results.filter(email => {
+      for (const hasFilter of filters.has) {
+        switch (hasFilter) {
+          case "attachment":
+          case "attachments":
+            if (!email.attachments || email.attachments.length === 0) return false;
+            break;
+          case "star":
+          case "starred":
+            if (!email.labelIds.includes("STARRED")) return false;
+            break;
+          case "calendar":
+          case "invite":
+            if (!email.calendarEvent) return false;
+            break;
+        }
+      }
+
+      for (const isFilter of filters.is) {
+        switch (isFilter) {
+          case "unread":
+            if (!email.labelIds.includes("UNREAD")) return false;
+            break;
+          case "read":
+            if (email.labelIds.includes("UNREAD")) return false;
+            break;
+          case "starred":
+          case "star":
+            if (!email.labelIds.includes("STARRED")) return false;
+            break;
+          case "important":
+            if (!email.labelIds.includes("IMPORTANT")) return false;
+            break;
+        }
+      }
+
+      if (filters.after) {
+        const afterDate = new Date(filters.after);
+        if (!isNaN(afterDate.getTime()) && new Date(email.date) < afterDate) return false;
+      }
+
+      if (filters.before) {
+        const beforeDate = new Date(filters.before);
+        if (!isNaN(beforeDate.getTime())) {
+          beforeDate.setHours(23, 59, 59, 999);
+          if (new Date(email.date) > beforeDate) return false;
+        }
+      }
+
+      for (const labelFilter of filters.label) {
+        if (!email.labelIds.includes(labelFilter)) return false;
+      }
+
+      return true;
+    });
+
+    return results;
+  } catch (err) {
+    apiLogger.warn("FTS5 search failed", { query, matchExpr, error: err });
+    return [];
+  }
+}
+
+/** Force rebuild the FTS5 index from all cached emails */
+export function rebuildFtsIndex(): void {
+  const sqlite = getSqlite();
+  _rebuildFtsIndex(sqlite);
+}
+
 // ===== Housekeeping =====
 
 /** Clear all cached data for an account (e.g. after logout) */
 export function clearAccountData(accountEmail: string): void {
   const db = getDb();
+  const sqlite = getSqlite();
   db.delete(emails).where(eq(emails.accountEmail, accountEmail)).run();
   db.delete(syncState).where(eq(syncState.accountEmail, accountEmail)).run();
   db.delete(labelCounts).where(eq(labelCounts.accountEmail, accountEmail)).run();
   db.delete(userLabels).where(eq(userLabels.accountEmail, accountEmail)).run();
+  sqlite.run("DELETE FROM emails_fts WHERE account_email = ?", [accountEmail]);
 }
 
 /** Clear all cached data */
 export function clearAllData(): void {
   const db = getDb();
+  const sqlite = getSqlite();
   db.delete(emails).run();
   db.delete(syncState).run();
   db.delete(labelCounts).run();
   db.delete(userLabels).run();
+  sqlite.run("DELETE FROM emails_fts");
 }
 
 /** Initialize the database (call on app start) */

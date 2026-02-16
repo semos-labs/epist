@@ -19,7 +19,6 @@
     "drizzle-orm": "^0.45.1",
     "imapflow": "^1.2.9",
     "jotai": "^2.12.3",
-    "lunr": "^2.3.9",
     "luxon": "^3.6.1",
     "mailparser": "^3.9.3",
     "marked": "^17.0.2",
@@ -33,7 +32,6 @@
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "@types/lunr": "^2.3.7",
     "@types/luxon": "^3.6.2",
     "@types/mailparser": "^3.4.6",
     "@types/nodemailer": "^7.0.10",

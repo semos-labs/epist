@@ -72,8 +72,10 @@ import {
   gmailLabelCountsAtom,
   hasMoreEmailsAtom,
   isSyncingAtom,
+  searchLocalResultsAtom,
   searchRemoteResultsAtom,
   isSearchingRemoteAtom,
+  accountFilterAtom,
   userLabelsAtom,
   type FocusContext,
   type Overlay,
@@ -87,6 +89,7 @@ import { collectFiles, filterFiles, clearFileCache } from "../utils/fzf.ts";
 import { formatEmailAddress, formatEmailAddresses, isStarred, isUnread, FOLDER_LABELS, type Email, type LabelId, type AttendeeStatus } from "../domain/email.ts";
 import { findCommand, getAllCommands } from "../keybinds/registry.ts";
 import { getProviderOrNull } from "../api/provider.ts";
+import { searchLocalFTS, rebuildFtsIndex, updateCachedEmailLabels } from "../lib/database.ts";
 
 // ===== Configuration =====
 
@@ -424,9 +427,12 @@ export const markReadAtom = atom(
     
     const emails = get(emailsAtom);
     const email = emails.find(e => e.id === id);
-    set(emailsAtom, emails.map(e => 
-      e.id === id ? { ...e, labelIds: e.labelIds.filter(l => l !== "UNREAD") } : e
-    ));
+    set(emailsAtom, emails.map(e => {
+      if (e.id !== id) return e;
+      const newLabels = e.labelIds.filter(l => l !== "UNREAD");
+      updateCachedEmailLabels(e.id, newLabels);
+      return { ...e, labelIds: newLabels };
+    }));
 
     // Fire-and-forget provider call
     if (get(isLoggedInAtom) && email?.accountEmail) {
@@ -448,14 +454,14 @@ export const markUnreadAtom = atom(
     if (!email) return;
 
     const wasUnread = email.labelIds.includes("UNREAD");
-    set(emailsAtom, emails.map(e => 
-      e.id === id
-        ? { ...e, labelIds: wasUnread 
-            ? e.labelIds.filter(l => l !== "UNREAD")
-            : [...e.labelIds, "UNREAD"] 
-          }
-        : e
-    ));
+    set(emailsAtom, emails.map(e => {
+      if (e.id !== id) return e;
+      const newLabels = wasUnread
+        ? e.labelIds.filter(l => l !== "UNREAD")
+        : [...e.labelIds, "UNREAD"];
+      updateCachedEmailLabels(e.id, newLabels);
+      return { ...e, labelIds: newLabels };
+    }));
     set(showMessageAtom, { text: wasUnread ? "Marked as read" : "Marked as unread", type: "info" });
 
     // Fire-and-forget provider call
@@ -482,9 +488,11 @@ export const toggleStarAtom = atom(
     const wasStarred = isStarred(email);
     set(emailsAtom, emails.map(e => {
       if (e.id !== id) return e;
-      return wasStarred
-        ? { ...e, labelIds: e.labelIds.filter(l => l !== "STARRED") }
-        : { ...e, labelIds: [...e.labelIds, "STARRED"] };
+      const newLabels = wasStarred
+        ? e.labelIds.filter(l => l !== "STARRED")
+        : [...e.labelIds, "STARRED"];
+      updateCachedEmailLabels(e.id, newLabels);
+      return { ...e, labelIds: newLabels };
     }));
     set(showMessageAtom, { 
       text: wasStarred ? "Unstarred" : "★ Starred", 
@@ -509,16 +517,26 @@ export const archiveEmailAtom = atom(
     if (!thread) return;
     
     set(pushUndoAtom, "Archive");
+    // Capture position before removing from list
+    const threads = get(filteredThreadsAtom);
+    const idx = threads.findIndex(t => t.id === thread.id);
     const threadMessageIds = new Set(thread.messages.map(m => m.id));
     const emails = get(emailsAtom);
     set(emailsAtom, emails.map(e => {
-      if (threadMessageIds.has(e.id)) {
-        return { ...e, labelIds: e.labelIds.filter(l => l !== "INBOX") };
-      }
-      return e;
+      if (!threadMessageIds.has(e.id)) return e;
+      const newLabels = e.labelIds.filter(l => l !== "INBOX");
+      updateCachedEmailLabels(e.id, newLabels);
+      return { ...e, labelIds: newLabels };
     }));
     
-    set(moveSelectionAtom, "down");
+    // Select next thread at same position
+    const remaining = get(filteredThreadsAtom);
+    if (remaining.length > 0) {
+      const nextIdx = Math.min(idx, remaining.length - 1);
+      set(selectedThreadIdAtom, remaining[nextIdx]!.id);
+    } else {
+      set(selectedThreadIdAtom, null);
+    }
     set(showMessageAtom, { text: "Archived (z to undo)", type: "success" });
 
     // Fire-and-forget provider calls
@@ -541,20 +559,30 @@ export const deleteEmailAtom = atom(
     if (!thread) return;
     
     set(pushUndoAtom, "Delete");
+    const currentLabel = get(currentLabelAtom);
+    // Capture position before removing from list so we can select the next thread
+    const threads = get(filteredThreadsAtom);
+    const idx = threads.findIndex(t => t.id === thread.id);
     const threadMessageIds = new Set(thread.messages.map(m => m.id));
     const emails = get(emailsAtom);
     set(emailsAtom, emails.map(e => {
-      if (threadMessageIds.has(e.id)) {
-        const newLabelIds = e.labelIds.filter(l => l !== "INBOX");
-        if (!newLabelIds.includes("TRASH")) {
-          newLabelIds.push("TRASH");
-        }
-        return { ...e, labelIds: newLabelIds };
+      if (!threadMessageIds.has(e.id)) return e;
+      const newLabels = e.labelIds.filter(l => l !== currentLabel);
+      if (!newLabels.includes("TRASH")) {
+        newLabels.push("TRASH");
       }
-      return e;
+      updateCachedEmailLabels(e.id, newLabels);
+      return { ...e, labelIds: newLabels };
     }));
     
-    set(moveSelectionAtom, "down");
+    // Select next thread (same index, which is now the next one, or last if we were at the end)
+    const remaining = get(filteredThreadsAtom);
+    if (remaining.length > 0) {
+      const nextIdx = Math.min(idx, remaining.length - 1);
+      set(selectedThreadIdAtom, remaining[nextIdx]!.id);
+    } else {
+      set(selectedThreadIdAtom, null);
+    }
     set(showMessageAtom, { text: "Moved to trash (z to undo)", type: "success" });
 
     // Fire-and-forget provider calls
@@ -615,13 +643,18 @@ export const moveToFolderAtom = atom(
     const currentLabel = get(currentLabelAtom);
     const emails = get(emailsAtom);
 
+    // Capture position before removing from list
+    const threads = get(filteredThreadsAtom);
+    const idx = threads.findIndex(t => t.id === thread.id);
+
     // Optimistic UI update
     set(emailsAtom, emails.map(e => {
       if (!threadMessageIds.has(e.id)) return e;
-      let newLabels = e.labelIds.filter(l => l !== currentLabel);
+      const newLabels = e.labelIds.filter(l => l !== currentLabel);
       if (!newLabels.includes(targetLabel)) {
         newLabels.push(targetLabel);
       }
+      updateCachedEmailLabels(e.id, newLabels);
       return { ...e, labelIds: newLabels };
     }));
 
@@ -635,7 +668,14 @@ export const moveToFolderAtom = atom(
       }
     }
 
-    set(moveSelectionAtom, "down");
+    // Select next thread at same position
+    const remaining = get(filteredThreadsAtom);
+    if (remaining.length > 0) {
+      const nextIdx = Math.min(idx, remaining.length - 1);
+      set(selectedThreadIdAtom, remaining[nextIdx]!.id);
+    } else {
+      set(selectedThreadIdAtom, null);
+    }
     set(showMessageAtom, { text: `Moved to ${targetLabel.charAt(0) + targetLabel.slice(1).toLowerCase()} (z to undo)`, type: "success" });
   }
 );
@@ -715,11 +755,12 @@ export const bulkArchiveAtom = atom(
 
     // Optimistic UI update
     const emails = get(emailsAtom);
-    set(emailsAtom, emails.map(e =>
-      emailIdsToArchive.has(e.id)
-        ? { ...e, labelIds: e.labelIds.filter(l => l !== "INBOX") }
-        : e
-    ));
+    set(emailsAtom, emails.map(e => {
+      if (!emailIdsToArchive.has(e.id)) return e;
+      const newLabels = e.labelIds.filter(l => l !== "INBOX");
+      updateCachedEmailLabels(e.id, newLabels);
+      return { ...e, labelIds: newLabels };
+    }));
 
     // Fire-and-forget provider calls
     if (get(isLoggedInAtom)) {
@@ -757,11 +798,13 @@ export const bulkDeleteAtom = atom(
     }
 
     // Optimistic UI update
+    const currentLabel = get(currentLabelAtom);
     const emails = get(emailsAtom);
     set(emailsAtom, emails.map(e => {
       if (!emailIdsToDelete.has(e.id)) return e;
-      const newLabels = e.labelIds.filter(l => l !== "INBOX");
+      const newLabels = e.labelIds.filter(l => l !== currentLabel);
       if (!newLabels.includes("TRASH")) newLabels.push("TRASH");
+      updateCachedEmailLabels(e.id, newLabels);
       return { ...e, labelIds: newLabels };
     }));
 
@@ -801,9 +844,12 @@ export const bulkMarkReadAtom = atom(
 
     // Optimistic UI update
     const emails = get(emailsAtom);
-    set(emailsAtom, emails.map(e =>
-      emailIds.has(e.id) ? { ...e, labelIds: e.labelIds.filter(l => l !== "UNREAD") } : e
-    ));
+    set(emailsAtom, emails.map(e => {
+      if (!emailIds.has(e.id)) return e;
+      const newLabels = e.labelIds.filter(l => l !== "UNREAD");
+      updateCachedEmailLabels(e.id, newLabels);
+      return { ...e, labelIds: newLabels };
+    }));
 
     // Fire-and-forget provider calls
     if (get(isLoggedInAtom)) {
@@ -843,9 +889,11 @@ export const bulkToggleStarAtom = atom(
     const emails = get(emailsAtom);
     set(emailsAtom, emails.map(e => {
       if (!emailIds.has(e.id)) return e;
-      return e.labelIds.includes("STARRED")
-        ? { ...e, labelIds: e.labelIds.filter(l => l !== "STARRED") }
-        : { ...e, labelIds: [...e.labelIds, "STARRED"] };
+      const newLabels = e.labelIds.includes("STARRED")
+        ? e.labelIds.filter(l => l !== "STARRED")
+        : [...e.labelIds, "STARRED"];
+      updateCachedEmailLabels(e.id, newLabels);
+      return { ...e, labelIds: newLabels };
     }));
 
     // Fire-and-forget provider calls
@@ -911,6 +959,7 @@ export const openSearchAtom = atom(
   (get, set) => {
     set(searchQueryAtom, "");
     set(searchSelectedIndexAtom, 0);
+    set(searchLocalResultsAtom, []);
     set(searchRemoteResultsAtom, []);
     set(isSearchingRemoteAtom, false);
     set(focusAtom, "search");
@@ -1040,6 +1089,9 @@ export const executeCommandAtom = atom(
       case "reset-sync":
         set(resetSyncAtom);
         break;
+      case "reindex":
+        set(reindexAtom);
+        break;
       default:
         set(showMessageAtom, { text: `Executed: ${command.name}`, type: "info" });
     }
@@ -1113,14 +1165,30 @@ export const searchRemoteAtom = atom(
   }
 );
 
-// Update search query — local filter is instant, remote is debounced
+// Update search query — local FTS is instant, remote is debounced
 export const updateSearchQueryAtom = atom(
   null,
   (get, set, query: string) => {
     set(searchQueryAtom, query);
     set(searchSelectedIndexAtom, 0);
+
+    // Run local FTS5 search immediately (synchronous, sub-ms on thousands of emails)
+    if (query.trim()) {
+      try {
+        const accountFilter = get(accountFilterAtom);
+        const results = searchLocalFTS(query, {
+          accountEmail: accountFilter || undefined,
+        });
+        set(searchLocalResultsAtom, results);
+      } catch {
+        // FTS failure is non-critical, clear results
+        set(searchLocalResultsAtom, []);
+      }
+    } else {
+      set(searchLocalResultsAtom, []);
+    }
     
-    // Update selection to first matching thread (local results, instant)
+    // Update selection to first matching thread
     const threads = get(filteredThreadsAtom);
     if (threads.length > 0) {
       set(selectedThreadIdAtom, threads[0]!.id);
@@ -1147,6 +1215,7 @@ export const closeSearchAtom = atom(
     if (_searchDebounceTimer) clearTimeout(_searchDebounceTimer);
     set(focusAtom, "list");
     set(searchQueryAtom, "");
+    set(searchLocalResultsAtom, []);
     set(searchRemoteResultsAtom, []);
     set(isSearchingRemoteAtom, false);
   }
@@ -2641,6 +2710,17 @@ export const resetSyncAtom = atom(null, async (get, set) => {
     set(showMessageAtom, { text: `Resync failed: ${err instanceof Error ? err.message : err}`, type: "error" });
   } finally {
     set(isSyncingAtom, false);
+  }
+});
+
+// Rebuild the FTS5 search index from scratch
+export const reindexAtom = atom(null, (get, set) => {
+  set(showMessageAtom, { text: "Rebuilding search index…", type: "info" });
+  try {
+    rebuildFtsIndex();
+    set(showMessageAtom, { text: "Search index rebuilt ✓", type: "success" });
+  } catch (err) {
+    set(showMessageAtom, { text: `Reindex failed: ${err instanceof Error ? err.message : err}`, type: "error" });
   }
 });
 

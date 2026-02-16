@@ -79,6 +79,7 @@ export const KEYBIND_REGISTRY: Record<KeybindScope, KeybindDef[]> = {
     { key: "", display: "", description: "Add IMAP/SMTP account", action: "addAccount", command: "add-account" },
     { key: "", display: "", description: "Sync emails from server", action: "sync", command: "sync" },
     { key: "", display: "", description: "Clear cache & full resync", action: "resetSync", command: "reset-sync" },
+    { key: "", display: "", description: "Rebuild search index", action: "reindex", command: "reindex" },
   ],
 
   // ── Email View ─────────────────────────────────────────
