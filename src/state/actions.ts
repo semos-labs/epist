@@ -2763,15 +2763,29 @@ export const loadMoreEmailsAtom = atom(null, async (get, set) => {
 
 // Check auth state on startup and start sync if logged in
 export const checkAuthAtom = atom(null, async (get, set) => {
-  const { getAccounts, hasGmailAccess } = await import("../auth/index.ts");
-  const { startSync } = await import("../lib/sync.ts");
-  const { registerProvider } = await import("../api/provider.ts");
-  const { GmailProvider } = await import("../api/gmail-provider.ts");
+  // Wait for config to be loaded first (avoid race with loadConfigAtom)
+  const config = get(configAtom);
 
+  // Parallelize dynamic imports instead of sequential awaits
+  const [
+    { getAccounts, hasGmailAccess },
+    { startSync, updateAccounts, manualSync },
+    { registerProvider },
+    { GmailProvider },
+  ] = await Promise.all([
+    import("../auth/index.ts"),
+    import("../lib/sync.ts"),
+    import("../api/provider.ts"),
+    import("../api/gmail-provider.ts"),
+  ]);
+
+  // Accounts ready for immediate sync (Gmail — stateless REST, no connect needed)
+  const readyAccountEmails: string[] = [];
+  // All account emails including IMAP (for isLoggedIn check)
   const allAccountEmails: string[] = [];
 
   try {
-    // 1. Google OAuth accounts
+    // 1. Google OAuth accounts — ready immediately
     const oauthAccounts = await getAccounts();
     set(googleAccountsAtom, oauthAccounts.map(a => ({
       email: a.account.email,
@@ -2783,43 +2797,45 @@ export const checkAuthAtom = atom(null, async (get, set) => {
     for (const acc of gmailAccounts) {
       const provider = new GmailProvider(acc.account.email);
       registerProvider(provider);
+      readyAccountEmails.push(acc.account.email);
       allAccountEmails.push(acc.account.email);
     }
 
-    // 2. IMAP accounts from config
-    const config = get(configAtom);
+    // 2. IMAP accounts from config — connect in background, add to sync once ready
     const imapAccounts = config.accounts.filter(a => a.provider === "imap" && a.imap && a.smtp);
     if (imapAccounts.length > 0) {
       const { ImapSmtpProvider } = await import("../api/imap-provider.ts");
       for (const acc of imapAccounts) {
-        try {
-          const provider = new ImapSmtpProvider(acc.email, acc.imap!, acc.smtp!);
-          registerProvider(provider);
-          await provider.connect();
-          allAccountEmails.push(acc.email);
-        } catch (err) {
-          // IMAP connection failed — log but don't stop other accounts
+        const provider = new ImapSmtpProvider(acc.email, acc.imap!, acc.smtp!);
+        registerProvider(provider);
+        allAccountEmails.push(acc.email);
+        // Connect in background — once connected, add to sync engine
+        provider.connect().then(() => {
+          updateAccounts([...readyAccountEmails, ...imapAccounts.map(a => a.email)]);
+          manualSync(); // Trigger sync for the newly connected account
+        }).catch((err) => {
           set(showMessageAtom, {
             text: `Failed to connect IMAP account ${acc.email}: ${err instanceof Error ? err.message : err}`,
             type: "error",
           });
-        }
+        });
       }
     }
 
-    // 3. Mark as logged in if we have any accounts
+    // 3. Mark as logged in ASAP so the UI shows immediately
     set(isLoggedInAtom, allAccountEmails.length > 0);
 
     if (allAccountEmails.length > 0) {
-      // Start sync engine with all connected accounts
-      await startSync(allAccountEmails, {
+      // Start sync engine with ready accounts only (Gmail).
+      // IMAP accounts join once their connections are established.
+      await startSync(readyAccountEmails, {
         onEmailsUpdated: (emails) => set(emailsAtom, emails),
         onLabelCountsUpdated: (counts) => set(gmailLabelCountsAtom, counts),
         onStatus: (text, type) => set(showMessageAtom, { text, type }),
         onHasMore: (hasMore) => set(hasMoreEmailsAtom, hasMore),
       });
 
-      // Fetch custom labels and signatures
+      // Fetch custom labels and signatures (these are independent, fire in parallel)
       set(fetchUserLabelsAtom);
       set(fetchSignaturesAtom);
     }

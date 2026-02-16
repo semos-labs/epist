@@ -123,10 +123,9 @@ function AppContent() {
   const loadConfig = useSetAtom(loadConfigAtom);
   const checkAuth = useSetAtom(checkAuthAtom);
 
-  // Load config and check auth on mount
+  // Load config first, then check auth (checkAuth reads configAtom for IMAP accounts)
   React.useEffect(() => {
-    loadConfig();
-    checkAuth();
+    loadConfig().then(() => checkAuth());
   }, []);
 
   return (

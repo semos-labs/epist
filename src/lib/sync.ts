@@ -87,11 +87,13 @@ export async function startSync(accountEmails: string[], callbacks: SyncCallback
     callbacks.onLabelCountsUpdated(cachedCounts);
   }
 
-  // Do initial sync (fetches fresh data)
-  await doFullSync();
-
-  // Start polling
-  startPolling();
+  // Do initial sync in the background — don't block the UI
+  doFullSync().then(() => {
+    startPolling();
+  }).catch((err) => {
+    apiLogger.error("Background sync failed", err);
+    startPolling(); // Still start polling even if initial sync fails
+  });
 }
 
 /**
