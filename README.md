@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Terminal email client with vim-style keybindings</strong><br>
-  <em>Beautiful. Fast. Keyboard-driven.</em>
+  <em>Beautiful. Fast. Keyboard-driven. Gmail + IMAP/SMTP.</em>
 </p>
 
 <p align="center">
@@ -56,14 +56,16 @@ Most email clients are mouse-driven, bloated, and slow. Epist takes a different 
 |---------|-------------|
 | **⌨️ Vim Keybindings** | Navigate with `j`/`k`, `gg`/`G`, `h`/`l` — feels like home |
 | **📬 Two-Column Layout** | Email list on the left, full view on the right |
-| **🔗 Gmail Sync** | Multi-account OAuth with PKCE, background sync every 10s |
+| **🔗 Gmail + IMAP/SMTP** | Gmail OAuth with PKCE **and** generic IMAP/SMTP — use any email provider |
+| **🔐 Secure Credentials** | Passwords via `password_command` — works with Keychain, `pass`, 1Password CLI, Bitwarden, env vars |
 | **🧵 Thread View** | Conversation threads with `[`/`]` to navigate between messages |
-| **📂 Labels & Folders** | Dynamic labels fetched from Gmail with colored dots |
+| **📂 Labels & Folders** | Gmail labels with colored dots, IMAP folders mapped automatically |
 | **📁 Categories** | Collapsible Gmail categories (Social, Promotions, Updates, Forums) |
-| **🔍 Two-Step Search** | Instant local filtering + remote Gmail search with debouncing |
+| **🔍 Two-Step Search** | Instant local filtering + remote search with debouncing |
 | **📎 Attachments** | View, save, and open attachments — bulk save with `S` |
 | **📅 Calendar Invites** | Auto-parse inline and `.ics` calendar invites with RSVP support |
 | **✏️ Compose & Reply** | Full compose, reply, reply-all, forward, and quick inline reply |
+| **👥 Contact Autocomplete** | Tab/↑/↓/Enter to navigate suggestions from your email history |
 | **⭐ Bulk Actions** | Select multiple threads with `x`, then archive, delete, or move |
 | **↩️ Undo** | Undo the last action with `z` within a configurable timeout |
 | **📝 Command Palette** | Quick access to all actions with `:` |
@@ -80,13 +82,17 @@ There are many great terminal email clients out there. Here's how Epist stacks u
 
 | Feature | Epist | [NeoMutt](https://neomutt.org) | [aerc](https://aerc-mail.org) | [Himalaya](https://github.com/pimalaya/himalaya) | [Alpine](https://alpineapp.email) | [meli](https://meli-email.org) |
 |---------|:-----:|:-------:|:----:|:--------:|:------:|:----:|
+| **Protocol** | Gmail API + IMAP/SMTP | IMAP/POP3/SMTP | IMAP/SMTP/Notmuch | IMAP/SMTP | IMAP/POP3/SMTP | IMAP/Notmuch/Maildir |
 | **Gmail OAuth (built-in)** | ✅ | ❌¹ | ⚠️² | ⚠️² | ❌ | ❌ |
+| **IMAP/SMTP support** | ✅ Any provider | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Setup complexity** | `brew install` + `:login` | Extensive `.muttrc` config | Moderate config files | Moderate config | Menu-driven setup | TOML config |
+| **Secure credentials** | ✅ `password_command` | ✅ | ✅ | ✅ | ❌ | ✅ |
 | **Vim keybindings** | ✅ Out of the box | ✅ Customizable | ✅ Inspired | ❌ CLI only | ❌ Menu-driven | ⚠️ Partial |
 | **Two-column layout** | ✅ List + preview | ❌ Single pane | ❌ Single pane | ❌ CLI only | ❌ Single pane | ✅ |
 | **Thread view** | ✅ Navigate with `[`/`]` | ✅ | ✅ | ⚠️ Basic | ✅ | ✅ |
-| **Multi-account** | ✅ Easy switching | ✅ Complex config | ✅ | ✅ | ✅ | ✅ |
+| **Multi-account** | ✅ Mix Gmail + IMAP | ✅ Complex config | ✅ | ✅ | ✅ | ✅ |
 | **Calendar invites (ICS)** | ✅ Parse + RSVP | ❌ | ⚠️ View only | ❌ | ❌ | ❌ |
+| **Contact autocomplete** | ✅ From history | ✅ With aliases | ✅ | ❌ | ✅ | ❌ |
 | **Local cache / offline** | ✅ SQLite | ⚠️ Header cache | ❌ | ❌ | ❌ | ⚠️ Maildir |
 | **Search** | ✅ Local + remote | ✅ With notmuch | ✅ | ✅ Basic | ✅ | ✅ With notmuch |
 | **Gmail labels & categories** | ✅ Colored dots | ⚠️ Via IMAP folders | ⚠️ Via IMAP folders | ⚠️ Via IMAP folders | ⚠️ Via IMAP folders | ⚠️ Via IMAP folders |
@@ -97,12 +103,11 @@ There are many great terminal email clients out there. Here's how Epist stacks u
 | **Bulk actions** | ✅ Select + act | ✅ Tag patterns | ✅ | ❌ | ✅ | ✅ |
 | **Themeable** | ✅ TOML config | ✅ `.muttrc` | ✅ `stylesets` | ❌ | ✅ Limited | ✅ Themes |
 | **Written in** | TypeScript (Bun) | C | Go | Rust | C | Rust |
-| **Protocol** | Gmail API | IMAP/POP3/SMTP | IMAP/SMTP/Notmuch | IMAP/SMTP | IMAP/POP3/SMTP | IMAP/Notmuch/Maildir |
 
 <sup>¹ Requires external helper scripts (e.g. `oauth2.py`) or app-specific passwords</sup><br>
 <sup>² Supports OAuth via external credential commands, requires manual setup</sup>
 
-> **TL;DR** — Epist is built for people who want a **modern, Gmail-first** terminal email experience with **zero friction**. No config files to write, no credential helpers to set up, no external tools to install. Just `brew install epist`, type `:login`, and you're reading email in seconds.
+> **TL;DR** — Epist is built for people who want a **modern, keyboard-driven** terminal email experience with **zero friction**. Gmail users get one-command OAuth setup. IMAP/SMTP users get secure `password_command` integration with any secret manager. Mix both in a single client.
 
 ---
 
@@ -129,7 +134,53 @@ bun dev
 bun start
 ```
 
-### Set Up Google Cloud Credentials
+### Set Up Email — Choose Your Provider
+
+Epist supports **Gmail (OAuth)** and **IMAP/SMTP** (any email provider). You can use both simultaneously.
+
+---
+
+### Option A: IMAP/SMTP (Any Provider)
+
+Add your account directly to `~/.config/epist/config.toml`:
+
+```toml
+[[accounts]]
+name = "Work"
+email = "me@work.com"
+provider = "imap"
+
+[accounts.imap]
+host = "imap.work.com"
+port = 993
+security = "tls"
+username = "me@work.com"
+password_command = "security find-generic-password -a me@work.com -s epist -w"
+
+[accounts.smtp]
+host = "smtp.work.com"
+port = 587
+security = "starttls"
+username = "me@work.com"
+password_command = "security find-generic-password -a me@work.com -s epist -w"
+```
+
+**Password options** (pick one):
+
+| Method | Example |
+|--------|---------|
+| macOS Keychain | `password_command = "security find-generic-password -a me@work.com -s epist -w"` |
+| `pass` (GPG) | `password_command = "pass show email/work"` |
+| 1Password CLI | `password_command = "op read op://Personal/WorkEmail/password"` |
+| Bitwarden CLI | `password_command = "bw get password work-email"` |
+| Environment var | `password_command = "echo $WORK_EMAIL_PASSWORD"` |
+| Plain text | `password = "hunter2"` *(not recommended)* |
+
+You can add multiple `[[accounts]]` blocks for multiple IMAP/SMTP accounts.
+
+---
+
+### Option B: Gmail (OAuth)
 
 Epist requires Google Cloud credentials to access Gmail. Here's how to set them up:
 
@@ -184,7 +235,7 @@ export EPIST_GOOGLE_CLIENT_SECRET="your-client-secret"
 :login
 ```
 
-Follow the OAuth flow in your browser. Epist supports multiple Google accounts.
+Follow the OAuth flow in your browser. Epist supports multiple Google accounts — IMAP accounts are loaded automatically from `config.toml`.
 
 ### Navigate
 
@@ -339,14 +390,14 @@ Open the command palette with `:` and type a command:
 |---------|--------|
 | `search` | Search emails |
 
-### Google Account
+### Accounts
 
 | Command | Action |
 |---------|--------|
-| `login` | Add Google account |
+| `login` | Add Google account (OAuth) |
 | `logout` | Remove all accounts |
-| `profile` | Manage connected accounts |
-| `sync` | Force sync with Gmail |
+| `profile` | Manage connected accounts (Gmail + IMAP) |
+| `sync` | Force sync with server |
 | `reset-sync` | Clear cache & full resync |
 
 ### General
@@ -401,12 +452,37 @@ clientSecret = ""
 [keybinds]
 
 # ===== Accounts =====
+# Supported providers: "gmail" (OAuth) and "imap" (IMAP/SMTP)
 # Per-account signature overrides the global signature
+# You can mix Gmail and IMAP accounts freely
+
+# Gmail account (uses OAuth — run :login to authenticate)
 [[accounts]]
 name = "Personal"
 email = "me@example.com"
 provider = "gmail"
 is_default = true
+
+# IMAP/SMTP account (any email provider)
+[[accounts]]
+name = "Work"
+email = "me@work.com"
+provider = "imap"
+signature = "--\nSent from my work account"
+
+[accounts.imap]
+host = "imap.work.com"
+port = 993
+security = "tls"           # "tls" (993), "starttls" (143), or "none"
+username = "me@work.com"
+password_command = "pass show email/work"
+
+[accounts.smtp]
+host = "smtp.work.com"
+port = 587
+security = "starttls"      # "tls" (465), "starttls" (587), or "none"
+username = "me@work.com"
+password_command = "pass show email/work"
 ```
 
 ---
@@ -419,7 +495,7 @@ Epist follows the [XDG Base Directory Specification](https://specifications.free
 
 | File | Description |
 |------|-------------|
-| `config.toml` | User configuration (Google credentials, theme, keybinds) |
+| `config.toml` | User configuration (accounts, credentials, theme, keybinds) |
 
 **Data** (`~/.local/share/epist/`):
 
@@ -445,6 +521,9 @@ You can override XDG paths with environment variables:
 | **UI Framework** | [Glyph](https://github.com/semos-labs/glyph) (React for terminals) |
 | **State Management** | [Jotai](https://jotai.org) |
 | **Database** | SQLite via [Drizzle ORM](https://orm.drizzle.team) |
+| **IMAP** | [ImapFlow](https://imapflow.com) |
+| **SMTP** | [Nodemailer](https://nodemailer.com) |
+| **MIME Parsing** | [Mailparser](https://nodemailer.com/extras/mailparser/) |
 | **Date/Time** | [Luxon](https://moment.github.io/luxon) |
 | **NLP Dates** | [chrono-node](https://github.com/wanasit/chrono) |
 | **HTML Rendering** | [Cheerio](https://cheerio.js.org) + [Turndown](https://github.com/mixmark-io/turndown) + [Marked](https://marked.js.org) |
@@ -457,12 +536,16 @@ You can override XDG paths with environment variables:
 ### ✅ Completed
 
 - [x] Gmail sync via OAuth with PKCE
-- [x] Multi-account support
+- [x] IMAP/SMTP support (any email provider)
+- [x] Secure credentials via `password_command`
+- [x] Multi-account support (mix Gmail + IMAP)
 - [x] Two-column layout (list + view)
 - [x] Thread view with message navigation
 - [x] Compose, reply, reply-all, forward
 - [x] Quick inline reply
+- [x] Contact autocomplete from email history
 - [x] Dynamic Gmail labels & folders with colored dots
+- [x] IMAP folder auto-discovery (special-use flags + name heuristics)
 - [x] Collapsible Gmail categories
 - [x] Two-step search (local + remote)
 - [x] Attachment view, save, and open
@@ -487,7 +570,7 @@ You can override XDG paths with environment variables:
 
 - [ ] Downloadable binaries
 - [ ] Offline mode improvements
-- [ ] Contact auto-complete
+- [ ] IMAP IDLE push notifications
 - [ ] Email templates
 - [ ] PGP/GPG encryption
 
