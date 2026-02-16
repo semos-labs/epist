@@ -13,15 +13,18 @@
     "release:major": "bun scripts/release.ts --major"
   },
   "dependencies": {
-    "@semos-labs/glyph": "^0.1.87",
+    "@semos-labs/glyph": "^0.1.89",
     "cheerio": "^1.2.0",
     "chrono-node": "^2.8.0",
     "drizzle-orm": "^0.45.1",
+    "imapflow": "^1.2.9",
     "jotai": "^2.12.3",
     "lunr": "^2.3.9",
     "luxon": "^3.6.1",
+    "mailparser": "^3.9.3",
     "marked": "^17.0.2",
     "marked-terminal": "^7.3.0",
+    "nodemailer": "^8.0.1",
     "react": "^19.0.0",
     "react-error-boundary": "^6.1.0",
     "smol-toml": "^1.6.0",
@@ -32,6 +35,8 @@
     "@types/bun": "latest",
     "@types/lunr": "^2.3.7",
     "@types/luxon": "^3.6.2",
+    "@types/mailparser": "^3.4.6",
+    "@types/nodemailer": "^7.0.10",
     "@types/react": "^19.0.0",
     "@types/turndown": "^5.0.6",
     "drizzle-kit": "^0.31.9"

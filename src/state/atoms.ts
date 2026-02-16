@@ -43,21 +43,44 @@ export const configAtom = atom<EpistConfig>(getDefaultConfig());
 
 // ===== Multi-Account =====
 
-// All accounts — prefers Google accounts when logged in, falls back to config
+// All accounts — merges Google OAuth accounts with IMAP accounts from config
 export const accountsAtom = atom<AccountConfig[]>((get) => {
+  const result: AccountConfig[] = [];
+  const seen = new Set<string>();
+
+  // 1. Google OAuth accounts (always included when logged in)
   const googleAccounts = get(googleAccountsAtom);
-  if (googleAccounts.length > 0) {
-    // Build AccountConfig from Google accounts
-    return googleAccounts.map((ga, i) => ({
+  for (let i = 0; i < googleAccounts.length; i++) {
+    const ga = googleAccounts[i]!;
+    result.push({
       name: ga.name || ga.email.split("@")[0] || "Account",
       email: ga.email,
       provider: "gmail" as const,
-      is_default: i === 0,
-    }));
+      is_default: i === 0 && result.length === 0,
+    });
+    seen.add(ga.email.toLowerCase());
   }
-  // Fallback to config accounts
+
+  // 2. IMAP accounts from config (always included)
   const config = get(configAtom);
-  return config.accounts;
+  for (const acc of config.accounts) {
+    if (acc.provider === "imap" && !seen.has(acc.email.toLowerCase())) {
+      result.push(acc);
+      seen.add(acc.email.toLowerCase());
+    }
+  }
+
+  // 3. If no OAuth accounts, also include Gmail config accounts as fallback
+  if (googleAccounts.length === 0) {
+    for (const acc of config.accounts) {
+      if (acc.provider === "gmail" && !seen.has(acc.email.toLowerCase())) {
+        result.push(acc);
+        seen.add(acc.email.toLowerCase());
+      }
+    }
+  }
+
+  return result;
 });
 
 // Active account index for the global app context

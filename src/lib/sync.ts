@@ -1,23 +1,23 @@
 /**
- * Email sync engine.
+ * Email sync engine — provider-agnostic.
  *
  * Responsibilities:
- *   1. Initial load: fetch last 30 messages per account, store in DB
- *   2. Incremental sync: use Gmail history.list to fetch only new changes
+ *   1. Initial load: fetch last N messages per account, store in DB
+ *   2. Incremental sync: use provider.getChangesSince() for delta updates
  *   3. Polling: run incremental sync every 10 seconds
  *   4. Load more: fetch next page of messages on demand
- *   5. Label counts: fetch from Gmail and cache in DB
+ *   5. Label/folder counts: fetch from provider and cache in DB
+ *
+ * All provider-specific logic lives in the MailProvider implementations.
+ * This module talks exclusively through the MailProvider interface.
  */
 
 import {
-  listMessages,
-  getMessages,
-  getMessage,
-  fetchLabelCounts,
-  listHistory,
-  getProfile,
-  type HistoryResponse,
-} from "../api/gmail.ts";
+  getProvider,
+  getAllProviders,
+  type MailProvider,
+  type SyncCursor,
+} from "../api/provider.ts";
 import {
   upsertEmails,
   getCachedEmails,
@@ -26,7 +26,6 @@ import {
   saveLabelCounts,
   getDbLabelCounts,
   removeCachedEmails,
-  updateCachedEmailLabels,
   getCachedEmail,
   initDatabase,
   clearAccountData,
@@ -67,6 +66,7 @@ let _accounts: string[] = [];
 
 /**
  * Initialize sync engine. Call once on app start after login check.
+ * Providers must already be registered in the provider registry.
  */
 export async function startSync(accountEmails: string[], callbacks: SyncCallbacks): Promise<void> {
   _callbacks = callbacks;
@@ -120,26 +120,29 @@ export async function loadMore(labelId: LabelId = "INBOX"): Promise<void> {
 
   try {
     let loaded = 0;
-    for (const account of _accounts) {
-      const state = getSyncState(account, labelId);
+    for (const accountEmail of _accounts) {
+      const provider = getProviderSafe(accountEmail);
+      if (!provider) continue;
+
+      const state = getSyncState(accountEmail, labelId);
       const pageToken = state?.nextPageToken;
       if (!pageToken) continue; // no more pages
 
-      const listing = await listMessages(account, {
-        labelIds: [labelId],
+      const listing = await provider.listMessages({
+        folder: labelId,
         maxResults: LOAD_MORE_COUNT,
         pageToken,
       });
 
       if (listing.messages.length > 0) {
-        const newEmails = await getMessages(account, listing.messages.map(m => m.id));
+        const newEmails = await provider.getMessages(listing.messages.map(m => m.id));
         upsertEmails(newEmails);
         loaded += newEmails.length;
       }
 
       // Save updated page token
       saveSyncState({
-        accountEmail: account,
+        accountEmail,
         labelId,
         historyId: state?.historyId,
         nextPageToken: listing.nextPageToken,
@@ -152,8 +155,8 @@ export async function loadMore(labelId: LabelId = "INBOX"): Promise<void> {
     }
 
     // Check if any account still has more pages for this label
-    const hasMore = _accounts.some(account => {
-      const s = getSyncState(account, labelId);
+    const hasMore = _accounts.some(accountEmail => {
+      const s = getSyncState(accountEmail, labelId);
       return !!s?.nextPageToken;
     });
     _callbacks?.onHasMore(hasMore);
@@ -177,35 +180,37 @@ export async function fetchForLabel(labelId: LabelId): Promise<void> {
   // Push whatever is cached immediately
   pushAllEmails();
 
-  // Then fetch fresh data from Gmail for this label
+  // Then fetch fresh data for this label
   try {
     let loaded = 0;
-    for (const account of _accounts) {
-      const state = getSyncState(account, labelId);
+    for (const accountEmail of _accounts) {
+      const provider = getProviderSafe(accountEmail);
+      if (!provider) continue;
+
+      const state = getSyncState(accountEmail, labelId);
 
       // If we already have a historyId for this label, it's been fetched before
-      // Just do a quick incremental-ish check. Otherwise do initial fetch for this label.
       if (state?.historyId) continue; // Already synced
 
-      const listing = await listMessages(account, {
-        labelIds: [labelId],
+      const listing = await provider.listMessages({
+        folder: labelId,
         maxResults: INITIAL_FETCH_COUNT,
       });
 
       if (listing.messages.length > 0) {
-        const emails = await getMessages(account, listing.messages.map(m => m.id));
+        const emails = await provider.getMessages(listing.messages.map(m => m.id));
         upsertEmails(emails);
         loaded += emails.length;
-        apiLogger.info(`Fetched ${emails.length} ${labelId} messages for ${account}`);
+        apiLogger.info(`Fetched ${emails.length} ${labelId} messages for ${accountEmail}`);
       }
 
-      // Get profile for historyId (for future incremental sync)
-      const profile = await getProfile(account);
+      // Get sync cursor for future incremental sync
+      const cursor = await provider.getInitialSyncCursor();
 
       saveSyncState({
-        accountEmail: account,
+        accountEmail,
         labelId: labelId,
-        historyId: profile.historyId,
+        historyId: cursor.value,
         nextPageToken: listing.nextPageToken,
       });
 
@@ -275,36 +280,50 @@ function pushAllEmails(): void {
 }
 
 /**
+ * Safely get a provider, returning null if not registered.
+ * Avoids crashing when an account's provider failed to init.
+ */
+function getProviderSafe(accountEmail: string): MailProvider | null {
+  try {
+    return getProvider(accountEmail);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Full sync: initial fetch + label counts.
- * For each account, check if we have a historyId (= have synced before).
- * If no historyId → initial fetch of INITIAL_FETCH_COUNT messages.
- * If historyId exists → try incremental, fall back to full if history expired.
+ * For each account, check if we have a sync cursor (= have synced before).
+ * If no cursor → initial fetch. If cursor exists → try incremental, fall back to full.
  */
 async function doFullSync(): Promise<void> {
   if (_isSyncing) return;
   _isSyncing = true;
 
   try {
-    for (const account of _accounts) {
-      const state = getSyncState(account, "INBOX");
+    for (const accountEmail of _accounts) {
+      const provider = getProviderSafe(accountEmail);
+      if (!provider) continue;
+
+      const state = getSyncState(accountEmail, "INBOX");
 
       if (state?.historyId) {
         // Try incremental first
         try {
-          await doIncrementalSyncForAccount(account);
+          await doIncrementalSyncForAccount(accountEmail, provider);
           continue; // success, skip initial fetch
         } catch (err: any) {
           // History expired (404) or other error → fall back to full fetch
           if (err?.message?.includes("404")) {
-            apiLogger.warn(`History expired for ${account}, doing full fetch`);
+            apiLogger.warn(`Sync cursor expired for ${accountEmail}, doing full fetch`);
           } else {
-            apiLogger.error(`Incremental sync failed for ${account}, falling back to full`, err);
+            apiLogger.error(`Incremental sync failed for ${accountEmail}, falling back to full`, err);
           }
         }
       }
 
       // Initial fetch
-      await doInitialFetchForAccount(account);
+      await doInitialFetchForAccount(accountEmail, provider);
     }
 
     // Refresh label counts
@@ -325,29 +344,29 @@ async function doFullSync(): Promise<void> {
 /**
  * Initial fetch for one account: list INBOX messages → batch get → store in DB.
  */
-async function doInitialFetchForAccount(account: string): Promise<void> {
+async function doInitialFetchForAccount(accountEmail: string, provider: MailProvider): Promise<void> {
   _callbacks?.onStatus("Syncing emails…", "info");
 
-  // Get profile to obtain initial historyId
-  const profile = await getProfile(account);
+  // Get initial sync cursor
+  const cursor = await provider.getInitialSyncCursor();
 
-  // Fetch INBOX specifically — that's the default view
-  const listing = await listMessages(account, {
-    labelIds: ["INBOX"],
+  // Fetch INBOX — that's the default view
+  const listing = await provider.listMessages({
+    folder: "INBOX",
     maxResults: INITIAL_FETCH_COUNT,
   });
 
   if (listing.messages.length > 0) {
-    const emails = await getMessages(account, listing.messages.map(m => m.id));
+    const emails = await provider.getMessages(listing.messages.map(m => m.id));
     upsertEmails(emails);
-    apiLogger.info(`Fetched ${emails.length} INBOX messages for ${account}`);
+    apiLogger.info(`Fetched ${emails.length} INBOX messages for ${accountEmail}`);
   }
 
-  // Save sync state with historyId and nextPageToken
+  // Save sync state
   saveSyncState({
-    accountEmail: account,
+    accountEmail,
     labelId: "INBOX",
-    historyId: profile.historyId,
+    historyId: cursor.value,
     nextPageToken: listing.nextPageToken,
   });
 
@@ -364,8 +383,10 @@ async function doIncrementalSync(): Promise<void> {
 
   try {
     let totalChanges = 0;
-    for (const account of _accounts) {
-      totalChanges += await doIncrementalSyncForAccount(account);
+    for (const accountEmail of _accounts) {
+      const provider = getProviderSafe(accountEmail);
+      if (!provider) continue;
+      totalChanges += await doIncrementalSyncForAccount(accountEmail, provider);
     }
 
     if (totalChanges > 0) {
@@ -380,97 +401,61 @@ async function doIncrementalSync(): Promise<void> {
 }
 
 /**
- * Incremental sync for one account using Gmail history.list.
+ * Incremental sync for one account using the provider's delta API.
  * Returns the number of changes applied.
  */
-async function doIncrementalSyncForAccount(account: string): Promise<number> {
-  const state = getSyncState(account, "INBOX");
+async function doIncrementalSyncForAccount(accountEmail: string, provider: MailProvider): Promise<number> {
+  const state = getSyncState(accountEmail, "INBOX");
   if (!state?.historyId) return 0;
 
-  let changes = 0;
-  let pageToken: string | undefined;
-  let latestHistoryId = state.historyId;
-
-  do {
-    const historyRes: HistoryResponse = await listHistory(account, state.historyId, {
-      pageToken,
-    });
-
-    latestHistoryId = historyRes.historyId;
-
-    if (historyRes.history) {
-      for (const record of historyRes.history) {
-        // New messages
-        if (record.messagesAdded) {
-          const newIds = record.messagesAdded.map(m => m.message.id);
-          const newEmails = await getMessages(account, newIds);
-          upsertEmails(newEmails);
-          changes += newEmails.length;
-        }
-
-        // Deleted messages
-        if (record.messagesDeleted) {
-          const deletedIds = record.messagesDeleted.map(m => m.message.id);
-          removeCachedEmails(deletedIds);
-          changes += deletedIds.length;
-        }
-
-        // Labels added
-        if (record.labelsAdded) {
-          for (const entry of record.labelsAdded) {
-            // Re-fetch the message to get fresh labels
-            try {
-              const fresh = await getMessage(account, entry.message.id);
-              upsertEmails([fresh]);
-              changes++;
-            } catch {
-              // Message may have been deleted
-            }
-          }
-        }
-
-        // Labels removed
-        if (record.labelsRemoved) {
-          for (const entry of record.labelsRemoved) {
-            try {
-              const fresh = await getMessage(account, entry.message.id);
-              upsertEmails([fresh]);
-              changes++;
-            } catch {
-              // Message may have been deleted
-            }
-          }
-        }
-      }
-    }
-
-    pageToken = historyRes.nextPageToken;
-  } while (pageToken);
-
-  // Update historyId
-  saveSyncState({
-    accountEmail: account,
-    labelId: "INBOX",
-    historyId: latestHistoryId,
+  const cursor: SyncCursor = {
+    value: state.historyId,
     nextPageToken: state.nextPageToken,
+  };
+
+  const delta = await provider.getChangesSince(cursor);
+
+  let changes = 0;
+
+  // Upsert new/modified emails
+  if (delta.upsert.length > 0) {
+    upsertEmails(delta.upsert);
+    changes += delta.upsert.length;
+  }
+
+  // Remove deleted emails
+  if (delta.deleted.length > 0) {
+    removeCachedEmails(delta.deleted);
+    changes += delta.deleted.length;
+  }
+
+  // Update sync cursor
+  saveSyncState({
+    accountEmail,
+    labelId: "INBOX",
+    historyId: delta.cursor.value,
+    nextPageToken: delta.cursor.nextPageToken ?? state.nextPageToken,
   });
 
   if (changes > 0) {
-    apiLogger.info(`Incremental sync: ${changes} changes for ${account}`);
+    apiLogger.info(`Incremental sync: ${changes} changes for ${accountEmail}`);
   }
 
   return changes;
 }
 
 /**
- * Refresh label counts from Gmail and push to UI + DB.
+ * Refresh label counts from all providers and push to UI + DB.
  */
 async function refreshLabelCounts(): Promise<void> {
   const allCounts: Record<string, { total: number; unread: number }> = {};
 
-  for (const account of _accounts) {
+  for (const accountEmail of _accounts) {
+    const provider = getProviderSafe(accountEmail);
+    if (!provider) continue;
+
     try {
-      const counts = await fetchLabelCounts(account, FOLDER_LABELS as string[]);
+      const counts = await provider.getFolderCounts(FOLDER_LABELS as string[]);
 
       // Save to DB
       const rows: LabelCountRow[] = Object.entries(counts).map(([labelId, c]) => ({
@@ -478,7 +463,7 @@ async function refreshLabelCounts(): Promise<void> {
         total: c.total,
         unread: c.unread,
       }));
-      saveLabelCounts(account, rows);
+      saveLabelCounts(accountEmail, rows);
 
       // Aggregate
       for (const [labelId, c] of Object.entries(counts)) {
@@ -489,7 +474,7 @@ async function refreshLabelCounts(): Promise<void> {
         allCounts[labelId].unread += c.unread;
       }
     } catch (err) {
-      apiLogger.error(`Failed to fetch label counts for ${account}`, err);
+      apiLogger.error(`Failed to fetch label counts for ${accountEmail}`, err);
     }
   }
 

@@ -84,8 +84,9 @@ import { openFile, quickLook, saveFile } from "../utils/files.ts";
 import { saveDraft, deleteDraft } from "../utils/drafts.ts";
 import { loadConfig, saveConfig, resolvePath, type EpistConfig } from "../utils/config.ts";
 import { collectFiles, filterFiles, clearFileCache } from "../utils/fzf.ts";
-import { formatEmailAddress, formatEmailAddresses, isStarred, isUnread, FOLDER_LABELS, type LabelId, type AttendeeStatus } from "../domain/email.ts";
+import { formatEmailAddress, formatEmailAddresses, isStarred, isUnread, FOLDER_LABELS, type Email, type LabelId, type AttendeeStatus } from "../domain/email.ts";
 import { findCommand, getAllCommands } from "../keybinds/registry.ts";
+import { getProviderOrNull } from "../api/provider.ts";
 
 // ===== Configuration =====
 
@@ -202,16 +203,17 @@ export const fetchSignaturesAtom = atom(null, async (get, set) => {
   const sigs: Record<string, string> = {};
 
   try {
-    const { listSendAs } = await import("../api/gmail.ts");
-
     await Promise.all(
       accounts.map(async (acc) => {
         try {
-          const sendAsAliases = await listSendAs(acc.email);
+          const provider = getProviderOrNull(acc.email);
+          if (!provider?.getSendAsAliases) return;
+
+          const sendAsAliases = await provider.getSendAsAliases();
 
           // Pick the primary/default alias signature, falling back to the one matching the account email
           const primary = sendAsAliases.find(a => a.isPrimary)
-            ?? sendAsAliases.find(a => a.sendAsEmail === acc.email)
+            ?? sendAsAliases.find(a => a.email === acc.email)
             ?? sendAsAliases[0];
 
           if (primary?.signature) {
@@ -426,11 +428,10 @@ export const markReadAtom = atom(
       e.id === id ? { ...e, labelIds: e.labelIds.filter(l => l !== "UNREAD") } : e
     ));
 
-    // Fire-and-forget Gmail API call
+    // Fire-and-forget provider call
     if (get(isLoggedInAtom) && email?.accountEmail) {
-      import("../api/gmail.ts").then(({ markAsRead }) => 
-        markAsRead(email.accountEmail!, id).catch(() => {})
-      );
+      const provider = getProviderOrNull(email.accountEmail);
+      provider?.markRead(id).catch(() => {});
     }
   }
 );
@@ -457,12 +458,12 @@ export const markUnreadAtom = atom(
     ));
     set(showMessageAtom, { text: wasUnread ? "Marked as read" : "Marked as unread", type: "info" });
 
-    // Fire-and-forget Gmail API call
+    // Fire-and-forget provider call
     if (get(isLoggedInAtom) && email.accountEmail) {
-      import("../api/gmail.ts").then(({ markAsRead, markAsUnread }) => {
-        const fn = wasUnread ? markAsRead : markAsUnread;
-        fn(email.accountEmail!, id).catch(() => {});
-      });
+      const provider = getProviderOrNull(email.accountEmail);
+      if (provider) {
+        (wasUnread ? provider.markRead(id) : provider.markUnread(id)).catch(() => {});
+      }
     }
   }
 );
@@ -490,12 +491,12 @@ export const toggleStarAtom = atom(
       type: "info" 
     });
 
-    // Fire-and-forget Gmail API call
+    // Fire-and-forget provider call
     if (get(isLoggedInAtom) && email.accountEmail) {
-      import("../api/gmail.ts").then(({ starMessage, unstarMessage }) => {
-        const fn = wasStarred ? unstarMessage : starMessage;
-        fn(email.accountEmail!, id).catch(() => {});
-      });
+      const provider = getProviderOrNull(email.accountEmail);
+      if (provider) {
+        (wasStarred ? provider.unstar(id) : provider.star(id)).catch(() => {});
+      }
     }
   }
 );
@@ -520,15 +521,14 @@ export const archiveEmailAtom = atom(
     set(moveSelectionAtom, "down");
     set(showMessageAtom, { text: "Archived (z to undo)", type: "success" });
 
-    // Fire-and-forget Gmail API calls
+    // Fire-and-forget provider calls
     if (get(isLoggedInAtom)) {
-      import("../api/gmail.ts").then(({ archiveMessage }) => {
-        for (const msg of thread.messages) {
-          if (msg.accountEmail) {
-            archiveMessage(msg.accountEmail, msg.id).catch(() => {});
-          }
+      for (const msg of thread.messages) {
+        if (msg.accountEmail) {
+          const provider = getProviderOrNull(msg.accountEmail);
+          provider?.archive(msg.id).catch(() => {});
         }
-      });
+      }
     }
   }
 );
@@ -557,15 +557,14 @@ export const deleteEmailAtom = atom(
     set(moveSelectionAtom, "down");
     set(showMessageAtom, { text: "Moved to trash (z to undo)", type: "success" });
 
-    // Fire-and-forget Gmail API calls
+    // Fire-and-forget provider calls
     if (get(isLoggedInAtom)) {
-      import("../api/gmail.ts").then(({ trashMessage }) => {
-        for (const msg of thread.messages) {
-          if (msg.accountEmail) {
-            trashMessage(msg.accountEmail, msg.id).catch(() => {});
-          }
+      for (const msg of thread.messages) {
+        if (msg.accountEmail) {
+          const provider = getProviderOrNull(msg.accountEmail);
+          provider?.trash(msg.id).catch(() => {});
         }
-      });
+      }
     }
   }
 );
@@ -616,6 +615,7 @@ export const moveToFolderAtom = atom(
     const currentLabel = get(currentLabelAtom);
     const emails = get(emailsAtom);
 
+    // Optimistic UI update
     set(emailsAtom, emails.map(e => {
       if (!threadMessageIds.has(e.id)) return e;
       let newLabels = e.labelIds.filter(l => l !== currentLabel);
@@ -624,6 +624,16 @@ export const moveToFolderAtom = atom(
       }
       return { ...e, labelIds: newLabels };
     }));
+
+    // Fire-and-forget provider calls
+    if (get(isLoggedInAtom)) {
+      for (const msg of thread.messages) {
+        if (msg.accountEmail) {
+          const provider = getProviderOrNull(msg.accountEmail);
+          provider?.moveToFolder(msg.id, targetLabel, currentLabel).catch(() => {});
+        }
+      }
+    }
 
     set(moveSelectionAtom, "down");
     set(showMessageAtom, { text: `Moved to ${targetLabel.charAt(0) + targetLabel.slice(1).toLowerCase()} (z to undo)`, type: "success" });
@@ -693,20 +703,33 @@ export const bulkArchiveAtom = atom(
     set(pushUndoAtom, `Bulk archive ${selectedIds.size} threads`);
     const threads = get(filteredThreadsAtom);
     const emailIdsToArchive = new Set<string>();
+    const messagesToArchive: Email[] = [];
     for (const thread of threads) {
       if (selectedIds.has(thread.id)) {
         for (const msg of thread.messages) {
           emailIdsToArchive.add(msg.id);
+          messagesToArchive.push(msg);
         }
       }
     }
 
+    // Optimistic UI update
     const emails = get(emailsAtom);
     set(emailsAtom, emails.map(e =>
       emailIdsToArchive.has(e.id)
         ? { ...e, labelIds: e.labelIds.filter(l => l !== "INBOX") }
         : e
     ));
+
+    // Fire-and-forget provider calls
+    if (get(isLoggedInAtom)) {
+      for (const msg of messagesToArchive) {
+        if (msg.accountEmail) {
+          const provider = getProviderOrNull(msg.accountEmail);
+          provider?.archive(msg.id).catch(() => {});
+        }
+      }
+    }
 
     set(showMessageAtom, { text: `Archived ${selectedIds.size} threads (z to undo)`, type: "success" });
     set(clearBulkSelectionAtom);
@@ -723,14 +746,17 @@ export const bulkDeleteAtom = atom(
     set(pushUndoAtom, `Bulk delete ${selectedIds.size} threads`);
     const threads = get(filteredThreadsAtom);
     const emailIdsToDelete = new Set<string>();
+    const messagesToDelete: Email[] = [];
     for (const thread of threads) {
       if (selectedIds.has(thread.id)) {
         for (const msg of thread.messages) {
           emailIdsToDelete.add(msg.id);
+          messagesToDelete.push(msg);
         }
       }
     }
 
+    // Optimistic UI update
     const emails = get(emailsAtom);
     set(emailsAtom, emails.map(e => {
       if (!emailIdsToDelete.has(e.id)) return e;
@@ -738,6 +764,16 @@ export const bulkDeleteAtom = atom(
       if (!newLabels.includes("TRASH")) newLabels.push("TRASH");
       return { ...e, labelIds: newLabels };
     }));
+
+    // Fire-and-forget provider calls
+    if (get(isLoggedInAtom)) {
+      for (const msg of messagesToDelete) {
+        if (msg.accountEmail) {
+          const provider = getProviderOrNull(msg.accountEmail);
+          provider?.trash(msg.id).catch(() => {});
+        }
+      }
+    }
 
     set(showMessageAtom, { text: `Deleted ${selectedIds.size} threads (z to undo)`, type: "success" });
     set(clearBulkSelectionAtom);
@@ -752,17 +788,33 @@ export const bulkMarkReadAtom = atom(
     if (selectedIds.size === 0) return;
 
     const threads = get(filteredThreadsAtom);
+    const messagesToMark: Email[] = [];
     const emailIds = new Set<string>();
     for (const thread of threads) {
       if (selectedIds.has(thread.id)) {
-        for (const msg of thread.messages) emailIds.add(msg.id);
+        for (const msg of thread.messages) {
+          emailIds.add(msg.id);
+          messagesToMark.push(msg);
+        }
       }
     }
 
+    // Optimistic UI update
     const emails = get(emailsAtom);
     set(emailsAtom, emails.map(e =>
       emailIds.has(e.id) ? { ...e, labelIds: e.labelIds.filter(l => l !== "UNREAD") } : e
     ));
+
+    // Fire-and-forget provider calls
+    if (get(isLoggedInAtom)) {
+      for (const msg of messagesToMark) {
+        if (msg.accountEmail) {
+          const provider = getProviderOrNull(msg.accountEmail);
+          provider?.markRead(msg.id).catch(() => {});
+        }
+      }
+    }
+
     set(showMessageAtom, { text: `Marked ${selectedIds.size} threads as read`, type: "success" });
     set(clearBulkSelectionAtom);
   }
@@ -776,13 +828,18 @@ export const bulkToggleStarAtom = atom(
     if (selectedIds.size === 0) return;
 
     const threads = get(filteredThreadsAtom);
+    const messagesToStar: { msg: Email; wasStarred: boolean }[] = [];
     const emailIds = new Set<string>();
     for (const thread of threads) {
       if (selectedIds.has(thread.id)) {
-        for (const msg of thread.messages) emailIds.add(msg.id);
+        for (const msg of thread.messages) {
+          emailIds.add(msg.id);
+          messagesToStar.push({ msg, wasStarred: msg.labelIds.includes("STARRED") });
+        }
       }
     }
 
+    // Optimistic UI update
     const emails = get(emailsAtom);
     set(emailsAtom, emails.map(e => {
       if (!emailIds.has(e.id)) return e;
@@ -790,6 +847,19 @@ export const bulkToggleStarAtom = atom(
         ? { ...e, labelIds: e.labelIds.filter(l => l !== "STARRED") }
         : { ...e, labelIds: [...e.labelIds, "STARRED"] };
     }));
+
+    // Fire-and-forget provider calls
+    if (get(isLoggedInAtom)) {
+      for (const { msg, wasStarred } of messagesToStar) {
+        if (msg.accountEmail) {
+          const provider = getProviderOrNull(msg.accountEmail);
+          if (provider) {
+            (wasStarred ? provider.unstar(msg.id) : provider.star(msg.id)).catch(() => {});
+          }
+        }
+      }
+    }
+
     set(showMessageAtom, { text: `Toggled star on ${selectedIds.size} threads`, type: "success" });
     set(clearBulkSelectionAtom);
   }
@@ -1002,13 +1072,13 @@ export const searchRemoteAtom = atom(
     set(isSearchingRemoteAtom, true);
 
     try {
-      const { searchMessages } = await import("../api/gmail.ts");
-
-      // Search all accounts in parallel
+      // Search all accounts in parallel via their providers
       const results = await Promise.all(
-        accounts.map(acc => 
-          searchMessages(acc.email, query, 30).catch(() => [] as any[])
-        )
+        accounts.map(acc => {
+          const provider = getProviderOrNull(acc.email);
+          if (!provider) return Promise.resolve([] as Email[]);
+          return provider.searchMessages(query, 30).catch(() => [] as Email[]);
+        })
       );
 
       // Only update if the query hasn't changed while we were fetching
@@ -1423,15 +1493,19 @@ export const sendReplyAtom = atom(
       await deleteDraft(id);
     }
 
-    // Try to send via Gmail API
+    // Try to send via provider
     if (isLoggedIn && fromAccount) {
       try {
-        const { sendMessage } = await import("../api/gmail.ts");
+        const provider = getProviderOrNull(fromAccount.email);
+        if (!provider) {
+          set(showMessageAtom, { text: `No provider for ${fromAccount.email}`, type: "error" });
+          return;
+        }
         const toList = to.split(",").map(s => s.trim()).filter(Boolean);
         const ccList = cc ? cc.split(",").map(s => s.trim()).filter(Boolean) : undefined;
         const bccList = bcc ? bcc.split(",").map(s => s.trim()).filter(Boolean) : undefined;
 
-        await sendMessage(fromAccount.email, {
+        await provider.sendMessage({
           to: toList,
           cc: ccList,
           bcc: bccList,
@@ -1699,9 +1773,13 @@ export const sendInlineReplyAtom = atom(
 
     if (isLoggedIn && fromAccount) {
       try {
-        const { sendMessage } = await import("../api/gmail.ts");
+        const provider = getProviderOrNull(fromAccount.email);
+        if (!provider) {
+          set(showMessageAtom, { text: `No provider for ${fromAccount.email}`, type: "error" });
+          return;
+        }
 
-        await sendMessage(fromAccount.email, {
+        await provider.sendMessage({
           to: [email.from.email],
           subject: `Re: ${email.subject}`,
           body: content,
@@ -2395,21 +2473,23 @@ export const fetchUserLabelsAtom = atom(null, async (get, set) => {
     // DB read failed — not critical, we'll fetch from API
   }
 
-  // 2. Fetch fresh labels from Gmail and update both atom + cache
+  // 2. Fetch fresh labels from providers and update both atom + cache
   try {
-    const { listLabels } = await import("../api/gmail.ts");
     const { upsertUserLabels } = await import("../lib/database.ts");
 
     const results = await Promise.all(
       accounts.map(async (acc) => {
         try {
-          const labels = await listLabels(acc.email);
-          const userLbls = labels
-            .filter(l => l.type === "user")
-            .map(l => ({
-              id: l.id,
-              name: l.name,
-              color: hexToTerminalColor(l.color?.backgroundColor),
+          const provider = getProviderOrNull(acc.email);
+          if (!provider) return [];
+
+          const folders = await provider.listFolders();
+          const userLbls = folders
+            .filter(f => f.type === "user")
+            .map(f => ({
+              id: f.id,
+              name: f.name,
+              color: hexToTerminalColor(f.color),
               accountEmail: acc.email,
             } satisfies UserLabel));
 
@@ -2442,6 +2522,8 @@ export const fetchUserLabelsAtom = atom(null, async (get, set) => {
 export const loginAtom = atom(null, async (get, set) => {
   const { startLoginFlow, getAccounts, hasGmailAccess } = await import("../auth/index.ts");
   const { startSync, updateAccounts } = await import("../lib/sync.ts");
+  const { createProvider, registerProvider } = await import("../api/provider.ts");
+  const { GmailProvider } = await import("../api/gmail-provider.ts");
 
   set(isAuthLoadingAtom, true);
   set(showMessageAtom, { text: "Opening browser for authentication…", type: "info" });
@@ -2469,9 +2551,15 @@ export const loginAtom = atom(null, async (get, set) => {
     })));
     set(isLoggedInAtom, accounts.length > 0);
 
-    // Start sync engine with all accounts that have Gmail access
+    // Create + register providers for Gmail accounts
     const gmailAccounts = accounts.filter(a => hasGmailAccess(a));
     const gmailEmails = gmailAccounts.map(a => a.account.email);
+
+    for (const email of gmailEmails) {
+      const provider = new GmailProvider(email);
+      registerProvider(provider);
+    }
+
     updateAccounts(gmailEmails);
 
     await startSync(gmailEmails, {
@@ -2492,8 +2580,16 @@ export const logoutAtom = atom(null, async (get, set) => {
   const { logoutAll } = await import("../auth/index.ts");
   const { stopSync } = await import("../lib/sync.ts");
   const { clearAllData } = await import("../lib/database.ts");
+  const { getAllProviders, unregisterProvider } = await import("../api/provider.ts");
 
   stopSync();
+
+  // Disconnect and unregister all providers
+  for (const provider of getAllProviders()) {
+    try { await provider.disconnect(); } catch { /* best effort */ }
+    unregisterProvider(provider.accountEmail);
+  }
+
   await logoutAll();
   clearAllData();
 
@@ -2559,29 +2655,61 @@ export const loadMoreEmailsAtom = atom(null, async (get, set) => {
 export const checkAuthAtom = atom(null, async (get, set) => {
   const { getAccounts, hasGmailAccess } = await import("../auth/index.ts");
   const { startSync } = await import("../lib/sync.ts");
+  const { registerProvider } = await import("../api/provider.ts");
+  const { GmailProvider } = await import("../api/gmail-provider.ts");
+
+  const allAccountEmails: string[] = [];
 
   try {
-    const accounts = await getAccounts();
-    set(googleAccountsAtom, accounts.map(a => ({
+    // 1. Google OAuth accounts
+    const oauthAccounts = await getAccounts();
+    set(googleAccountsAtom, oauthAccounts.map(a => ({
       email: a.account.email,
       name: a.account.name,
       picture: a.account.picture,
     })));
-    set(isLoggedInAtom, accounts.length > 0);
 
-    if (accounts.length > 0) {
-      const gmailAccounts = accounts.filter(a => hasGmailAccess(a));
-      const gmailEmails = gmailAccounts.map(a => a.account.email);
+    const gmailAccounts = oauthAccounts.filter(a => hasGmailAccess(a));
+    for (const acc of gmailAccounts) {
+      const provider = new GmailProvider(acc.account.email);
+      registerProvider(provider);
+      allAccountEmails.push(acc.account.email);
+    }
 
-      // Start sync engine: loads from DB cache immediately, then fetches new data
-      await startSync(gmailEmails, {
+    // 2. IMAP accounts from config
+    const config = get(configAtom);
+    const imapAccounts = config.accounts.filter(a => a.provider === "imap" && a.imap && a.smtp);
+    if (imapAccounts.length > 0) {
+      const { ImapSmtpProvider } = await import("../api/imap-provider.ts");
+      for (const acc of imapAccounts) {
+        try {
+          const provider = new ImapSmtpProvider(acc.email, acc.imap!, acc.smtp!);
+          registerProvider(provider);
+          await provider.connect();
+          allAccountEmails.push(acc.email);
+        } catch (err) {
+          // IMAP connection failed — log but don't stop other accounts
+          set(showMessageAtom, {
+            text: `Failed to connect IMAP account ${acc.email}: ${err instanceof Error ? err.message : err}`,
+            type: "error",
+          });
+        }
+      }
+    }
+
+    // 3. Mark as logged in if we have any accounts
+    set(isLoggedInAtom, allAccountEmails.length > 0);
+
+    if (allAccountEmails.length > 0) {
+      // Start sync engine with all connected accounts
+      await startSync(allAccountEmails, {
         onEmailsUpdated: (emails) => set(emailsAtom, emails),
         onLabelCountsUpdated: (counts) => set(gmailLabelCountsAtom, counts),
         onStatus: (text, type) => set(showMessageAtom, { text, type }),
         onHasMore: (hasMore) => set(hasMoreEmailsAtom, hasMore),
       });
 
-      // Fetch custom labels and Gmail signatures
+      // Fetch custom labels and signatures
       set(fetchUserLabelsAtom);
       set(fetchSignaturesAtom);
     }

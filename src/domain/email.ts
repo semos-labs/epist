@@ -227,6 +227,34 @@ export function normalizeSubject(subject: string): string {
   return subject.replace(/^(Re|Fwd|Fw):\s*/gi, "").trim();
 }
 
+/**
+ * Synthesize a thread ID from RFC 2822 headers.
+ *
+ * Used by IMAP providers that don't have native threading.
+ * The algorithm: the first Message-ID in the References chain becomes the
+ * canonical thread ID. If there are no References, fall back to In-Reply-To.
+ * If neither exists, the message's own Message-ID is used (standalone thread).
+ *
+ * This mirrors how most email clients reconstruct threads.
+ */
+export function synthesizeThreadId(email: {
+  messageId?: string;
+  inReplyTo?: string;
+  references?: string[];
+}): string {
+  // References header contains the full chain — the first entry is the root
+  if (email.references && email.references.length > 0) {
+    return email.references[0]!;
+  }
+  // In-Reply-To links to the parent — use as thread ID (not ideal for deep chains
+  // but good enough when References is missing)
+  if (email.inReplyTo) {
+    return email.inReplyTo;
+  }
+  // Standalone message — use its own Message-ID, or generate one
+  return email.messageId || `standalone-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 /** Group emails into threads, sorted by latest message date (newest first) */
 export function groupIntoThreads(emails: Email[]): Thread[] {
   const threadMap = new Map<string, Email[]>();

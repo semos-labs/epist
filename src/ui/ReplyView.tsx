@@ -167,8 +167,11 @@ function ContactSuggestions({ maxWidth }: { maxWidth: number }) {
       })}
       {/* Suggestion navigation keybinds — priority so they fire before Input */}
       <Keybind keypress="tab" onPress={() => acceptSuggestion()} priority />
+      <Keybind keypress="return" onPress={() => acceptSuggestion()} priority />
       <Keybind keypress="ctrl+n" onPress={() => moveSuggestion("next")} priority />
       <Keybind keypress="ctrl+p" onPress={() => moveSuggestion("prev")} priority />
+      <Keybind keypress="up" onPress={() => moveSuggestion("prev")} priority />
+      <Keybind keypress="down" onPress={() => moveSuggestion("next")} priority />
     </Box>
   );
 }
