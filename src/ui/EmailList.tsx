@@ -17,6 +17,7 @@ import {
   hasMoreEmailsAtom,
   isSyncingAtom,
   listVisibleCountAtom,
+  unreadSeparatorIndexAtom,
 } from "../state/atoms.ts";
 import {
   moveSelectionAtom,
@@ -232,6 +233,7 @@ export function EmailList() {
   const folderSidebarOpen = useAtomValue(folderSidebarOpenAtom);
   const hasMore = useAtomValue(hasMoreEmailsAtom);
   const isSyncing = useAtomValue(isSyncingAtom);
+  const separatorIndex = useAtomValue(unreadSeparatorIndexAtom);
   
   const isFocused = focus === "list";
   
@@ -280,10 +282,8 @@ export function EmailList() {
           </Box>
         ) : (
           visibleThreads.map((thread, index) => {
-            // Show separator between last unread and first read thread
-            const prevThread = index > 0 ? visibleThreads[index - 1] : 
-              (scrollOffset > 0 ? threads[scrollOffset + index - 1] : undefined);
-            const showSeparator = prevThread?.hasUnread && !thread.hasUnread;
+            const globalIndex = scrollOffset + index;
+            const showSeparator = globalIndex === separatorIndex;
 
             return (
               <React.Fragment key={thread.id}>

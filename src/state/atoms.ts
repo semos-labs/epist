@@ -197,6 +197,11 @@ export const listScrollOffsetAtom = atom<number>(0);
 // How many threads are visible in the list (set by EmailList on layout)
 export const listVisibleCountAtom = atom<number>(10);
 
+// Snapshot of which threads are "unread" for list sorting purposes.
+// Prevents the list from reordering mid-read — only refreshes on navigation events.
+// Key: threadId, Value: hasUnread at snapshot time. Empty map = use live data.
+export const unreadSortSnapshotAtom = atom<Map<string, boolean>>(new Map());
+
 // Scroll offset for email view (ScrollView clamps internally)
 export const viewScrollOffsetAtom = atom<number>(0);
 
@@ -380,6 +385,8 @@ export const filteredEmailsAtom = atom((get) => {
 
 // Threads grouped from filtered emails.
 // In normal (non-search) mode: unread threads first, then read — both groups sorted by recency.
+// Uses a snapshot for the unread/read partition so the list doesn't reorder while the user
+// reads an email. The snapshot is refreshed on navigation (moveSelectionAtom) and label switches.
 // In search mode: preserve FTS relevance ranking as-is.
 export const filteredThreadsAtom = atom((get) => {
   const emails = get(filteredEmailsAtom);
@@ -389,13 +396,37 @@ export const filteredThreadsAtom = atom((get) => {
   // In search mode, keep FTS ranking order
   if (focus === "search") return threads;
 
+  const snapshot = get(unreadSortSnapshotAtom);
+
   // Partition into unread-first, then read — both sorted by date (already are from groupIntoThreads)
   const unread: typeof threads = [];
   const read: typeof threads = [];
   for (const t of threads) {
-    (t.hasUnread ? unread : read).push(t);
+    // Use snapshot for known threads; live hasUnread for new threads not yet in the snapshot
+    const isUnread = snapshot.size > 0 && snapshot.has(t.id) ? snapshot.get(t.id)! : t.hasUnread;
+    (isUnread ? unread : read).push(t);
   }
   return [...unread, ...read];
+});
+
+// Index of the first "read" thread in the sorted list — used to render the separator.
+// Returns -1 if there's no boundary (all unread, all read, or search mode).
+export const unreadSeparatorIndexAtom = atom((get) => {
+  const threads = get(filteredThreadsAtom);
+  const focus = get(focusAtom);
+  if (focus === "search") return -1;
+
+  const snapshot = get(unreadSortSnapshotAtom);
+
+  for (let i = 0; i < threads.length; i++) {
+    const t = threads[i]!;
+    const isUnread = snapshot.size > 0 && snapshot.has(t.id) ? snapshot.get(t.id)! : t.hasUnread;
+    if (!isUnread) {
+      // Only show separator if there are unread threads above
+      return i > 0 ? i : -1;
+    }
+  }
+  return -1; // all unread or empty
 });
 
 // Selected thread ID (we select threads, not individual emails)

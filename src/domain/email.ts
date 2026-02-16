@@ -267,14 +267,14 @@ export function groupIntoThreads(emails: Email[]): Thread[] {
 
   const threads: Thread[] = [];
   for (const [threadId, messages] of threadMap) {
-    // Sort messages oldest → newest within thread
-    messages.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-    const latest = messages[messages.length - 1]!;
+    // Sort messages newest → oldest within thread (newest on top)
+    messages.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    const latest = messages[0]!;
     threads.push({
       id: threadId,
       messages,
       latest,
-      subject: normalizeSubject(messages[0]!.subject),
+      subject: normalizeSubject(messages[messages.length - 1]!.subject),
       count: messages.length,
       hasUnread: messages.some(m => m.labelIds.includes("UNREAD")),
       date: latest.date,

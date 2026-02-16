@@ -78,6 +78,7 @@ import {
   accountFilterAtom,
   userLabelsAtom,
   listVisibleCountAtom,
+  unreadSortSnapshotAtom,
   type FocusContext,
   type Overlay,
   type MessageType,
@@ -350,10 +351,24 @@ export const undoAtom = atom(
 
 // ===== Navigation Actions =====
 
+// Refresh the unread sort snapshot from live email data.
+// This controls WHEN the unread/read partition reorders in the list.
+// Called on navigation and label switches — NOT on read status changes.
+function refreshUnreadSnapshot(get: any, set: any) {
+  const emails = get(emailsAtom);
+  const snapshot = new Map<string, boolean>();
+  for (const e of emails) {
+    const current = snapshot.get(e.threadId) ?? false;
+    snapshot.set(e.threadId, current || e.labelIds.includes("UNREAD"));
+  }
+  set(unreadSortSnapshotAtom, snapshot);
+}
+
 // Move thread selection up/down
 export const moveSelectionAtom = atom(
   null,
   (get, set, direction: "up" | "down" | "first" | "last" | "halfPageUp" | "halfPageDown") => {
+    // Navigate using the CURRENT order (before snapshot refresh)
     const threads = get(filteredThreadsAtom);
     const currentIndex = get(selectedIndexAtom);
     
@@ -392,6 +407,10 @@ export const moveSelectionAtom = atom(
       set(activeLinkIndexAtom, -1);
       set(focusedMessageIndexAtom, -1);
     }
+
+    // Now refresh the snapshot — the list will reorder for the NEXT render,
+    // but the selected thread stays selected (by ID, not index).
+    refreshUnreadSnapshot(get, set);
 
     // Auto-load more when within 5 items of the bottom
     const LOAD_MORE_THRESHOLD = 5;
@@ -615,6 +634,9 @@ export const changeLabelAtom = atom(
     set(currentLabelAtom, label);
     set(selectedThreadIdAtom, null);
     set(listScrollOffsetAtom, 0);
+
+    // Refresh unread snapshot for the new label view
+    refreshUnreadSnapshot(get, set);
     
     // Select first thread already cached for this label
     const threads = get(filteredThreadsAtom);
@@ -628,6 +650,8 @@ export const changeLabelAtom = atom(
       set(isSyncingAtom, true);
       try {
         await fetchForLabel(label as string);
+        // Refresh snapshot after new emails arrive
+        refreshUnreadSnapshot(get, set);
         // After fetch, re-select first thread if nothing selected
         if (!get(selectedThreadIdAtom)) {
           const newThreads = get(filteredThreadsAtom);
@@ -1305,11 +1329,9 @@ export const toggleHeadersAtom = atom(
     // Determine which message to toggle
     let messageId: string;
     if (thread.count > 1) {
-      // UI displays messages in reverse (latest first), so map the UI index back
       const idx = get(focusedMessageIndexAtom);
       const uiIdx = idx < 0 ? 0 : idx;
-      const reversed = [...thread.messages].reverse();
-      messageId = reversed[uiIdx]?.id ?? email.id;
+      messageId = thread.messages[uiIdx]?.id ?? email.id;
     } else {
       messageId = email.id;
     }
@@ -1336,8 +1358,7 @@ export const toggleDebugHtmlAtom = atom(
     if (thread.count > 1) {
       const idx = get(focusedMessageIndexAtom);
       const uiIdx = idx < 0 ? 0 : idx;
-      const reversed = [...thread.messages].reverse();
-      messageId = reversed[uiIdx]?.id ?? email.id;
+      messageId = thread.messages[uiIdx]?.id ?? email.id;
     } else {
       messageId = email.id;
     }
@@ -1364,8 +1385,7 @@ export const copyHtmlToClipboardAtom = atom(
     if (thread.count > 1) {
       const idx = get(focusedMessageIndexAtom);
       const uiIdx = idx < 0 ? 0 : idx;
-      const reversed = [...thread.messages].reverse();
-      msg = reversed[uiIdx] ?? email;
+      msg = thread.messages[uiIdx] ?? email;
     } else {
       msg = email;
     }
@@ -1415,6 +1435,10 @@ export const openEmailAtom = atom(
   (get, set) => {
     const thread = get(selectedThreadAtom);
     if (thread) {
+      // Snapshot the current unread/read partition BEFORE marking as read,
+      // so the list doesn't reorder while the user is reading.
+      refreshUnreadSnapshot(get, set);
+
       // Mark all thread messages as read
       for (const msg of thread.messages) {
         if (msg.labelIds.includes("UNREAD")) {

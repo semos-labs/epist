@@ -848,8 +848,8 @@ function EmailBody({ availableHeight, viewFocused }: { availableHeight: number; 
   if (!thread || !email) return null;
 
   const isConversation = thread.count > 1;
-  // Reverse conversation messages so the latest is on top
-  const messages = isConversation ? [...thread.messages].reverse() : [email];
+  // Messages are already sorted newest-first in the thread
+  const messages = isConversation ? thread.messages : [email];
   const resolvedFocusIdx = focusedMsgIdx < 0 ? 0 : focusedMsgIdx;
 
   // Calculate link index offsets per message
