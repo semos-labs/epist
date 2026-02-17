@@ -59,8 +59,18 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y llvm
 
+      - name: Install llvm-strip (macOS)
+        if: runner.os == 'macOS'
+        run: brew install llvm
+
       - name: Strip binary
-        run: llvm-strip ${{ matrix.artifact }}
+        run: |
+          if command -v llvm-strip &> /dev/null; then
+            llvm-strip ${{ matrix.artifact }}
+          else
+            # Homebrew puts LLVM in a non-default path on macOS
+            $(brew --prefix llvm)/bin/llvm-strip ${{ matrix.artifact }}
+          fi
 
       - name: Make executable
         run: chmod +x ${{ matrix.artifact }}
