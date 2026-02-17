@@ -29,11 +29,11 @@ jobs:
           - os: macos-latest
             target: bun-darwin-x64
             artifact: epist-darwin-x64
-            strip: false  # cross-compiled, code signature can't be removed
+            strip: false
           - os: macos-latest
             target: bun-darwin-arm64
             artifact: epist-darwin-arm64
-            strip: true
+            strip: false
 
     runs-on: ${{ matrix.os }}
 
@@ -67,13 +67,6 @@ jobs:
         if: matrix.strip && runner.os == 'Linux'
         run: llvm-strip ${{ matrix.artifact }}
 
-      - name: Install llvm-strip (macOS)
-        if: matrix.strip && runner.os == 'macOS'
-        run: brew install llvm
-
-      - name: Strip binary (macOS)
-        if: matrix.strip && runner.os == 'macOS'
-        run: $(brew --prefix llvm)/bin/llvm-strip ${{ matrix.artifact }}
 
       - name: Make executable
         run: chmod +x ${{ matrix.artifact }}
