@@ -7,11 +7,11 @@ import * as cheerio from "cheerio";
 
 /**
  * A segment within a rendered line.
- * Lines can contain a mix of text and inline images.
+ * Lines can contain a mix of text, inline images, and links.
  */
 export interface LinePart {
-  type: "text" | "image";
-  /** For text: the rendered text (may include ANSI codes). For image: the alt text. */
+  type: "text" | "image" | "link";
+  /** For text: the rendered text (may include ANSI codes). For image: the alt text. For link: the label. */
   content: string;
   /** For image: the source URL */
   src?: string;
@@ -19,6 +19,8 @@ export interface LinePart {
   alt?: string;
   /** For image in table lines: the character width the placeholder occupied in the table layout */
   tableWidth?: number;
+  /** For link: the destination URL */
+  href?: string;
 }
 
 // ===== Link Detection =====
@@ -26,23 +28,32 @@ export interface LinePart {
 export interface ExtractedLink {
   id: string;
   href: string;
+  /** Human-readable label for the link */
+  label: string;
   /** Line index in the rendered output */
   lineIndex: number;
 }
 
-// ===== Image placeholder format =====
+// ===== Placeholder formats =====
 //
-// In marked-terminal's image handler we output:  ⬚⟪index⟫⟪alt⟫
-// where `index` is a number referencing an image registry array.
-// This keeps placeholders compact (important for table cells!) while
-// preserving the src URL for the UI to render actual <Image> components.
+// Images:  ⬚⟪index⟫⟪alt⟫   — index into imageRegistry
+// Links:   🔗⟪index⟫⟪label⟫ — index into linkRegistry
+//
+// Both use compact index-based placeholders so they survive
+// the Turndown → marked-terminal pipeline without mangling.
 
 interface ImageRegistryEntry {
   src: string;
   alt: string;
 }
 
-const IMG_PLACEHOLDER_RE = /⬚⟪(\d+)⟫⟪([^⟫]*)⟫/g;
+interface LinkRegistryEntry {
+  href: string;
+  label: string;
+}
+
+/** Combined regex for image (⬚) and link (🔗) placeholders */
+const PLACEHOLDER_RE = /(?:(⬚)|(🔗))⟪(\d+)⟫⟪([^⟫]*)⟫/g;
 
 // ===== DOM-based HTML Preprocessing =====
 
@@ -259,7 +270,7 @@ export function preprocessEmailDom(html: string): { html: string } {
 
 // ===== Turndown (HTML → Markdown) =====
 
-function createTurndownService(): TurndownService {
+function createTurndownService(linkRegistry: LinkRegistryEntry[]): TurndownService {
   const td = new TurndownService({
     headingStyle: "atx",
     codeBlockStyle: "fenced",
@@ -269,7 +280,8 @@ function createTurndownService(): TurndownService {
     hr: "---",
   });
 
-  // === Links: preserve readable URLs, hide ugly tracking URLs ===
+  // === Links: emit compact placeholders 🔗⟪index⟫⟪label⟫ ===
+  // The URL is stored in the linkRegistry; only the label is visible.
   td.addRule("cleanLinks", {
     filter: "a",
     replacement: (content, node) => {
@@ -278,27 +290,44 @@ function createTurndownService(): TurndownService {
       const text = content.trim();
 
       if (!text && !href) return "";
-      if (!text || text === " ") {
-        if (href) {
-          try { return `[${new URL(href).hostname}]`; } catch { return ""; }
+
+      // Link wraps an image (e.g. clickable banner) — let the image pass
+      // through as-is and emit the link separately after it.
+      if (/!\[.*?\]\(.*?\)/.test(text)) {
+        if (href && href.startsWith("http")) {
+          let linkLabel: string;
+          try { linkLabel = new URL(href).hostname; } catch { linkLabel = "link"; }
+          const idx = linkRegistry.length;
+          linkRegistry.push({ href, label: linkLabel });
+          return `${text}\n🔗⟪${idx}⟫⟪${linkLabel}⟫`;
         }
-        return "";
+        return text;
       }
 
-      if (text === href) {
+      // Determine a readable label
+      let label = text;
+      if (!label || label === " ") {
+        if (href) {
+          try { label = new URL(href).hostname; } catch { return ""; }
+        } else {
+          return "";
+        }
+      } else if (label === href) {
+        // Text IS the URL — show a friendlier version
         try {
           const u = new URL(href);
-          return `${u.hostname}${u.pathname === "/" ? "" : u.pathname}`;
-        } catch {
-          return text;
-        }
+          label = `${u.hostname}${u.pathname === "/" ? "" : u.pathname}`;
+        } catch { /* keep label as-is */ }
       }
 
-      if (href && href.startsWith("http") && href.length < 80) {
-        return `${text} (${href})`;
+      if (!href || !href.startsWith("http")) {
+        return label;
       }
 
-      return text;
+      // Store in registry and emit placeholder
+      const idx = linkRegistry.length;
+      linkRegistry.push({ href, label });
+      return `🔗⟪${idx}⟫⟪${label}⟫`;
     },
   });
 
@@ -463,32 +492,41 @@ function createMarkedInstance(width: number, imageRegistry: ImageRegistryEntry[]
 export const TABLE_CHARS_RE = /[│┌┐└┘├┤┬┴┼─]/;
 
 /**
- * Parse a rendered line into segments of text and inline images.
+ * Parse a rendered line into segments of text, inline images, and links.
  *
- * Image placeholders (⬚⟪index⟫⟪alt⟫) are split out as separate image parts.
- * The index references the imageRegistry to get the actual src URL.
+ * Placeholders are split out as separate parts:
+ *   - Image: ⬚⟪index⟫⟪alt⟫  → { type: "image", src, alt }
+ *   - Link:  🔗⟪index⟫⟪label⟫ → { type: "link", href, content: label }
  *
  * For table lines (containing box-drawing characters), images get a `tableWidth`
  * property so the renderer can pad them to preserve column alignment.
  */
-export function parseLineSegments(rawLine: string, imageRegistry: ImageRegistryEntry[]): LinePart[] {
+export function parseLineSegments(
+  rawLine: string,
+  imageRegistry: ImageRegistryEntry[],
+  linkRegistry: LinkRegistryEntry[] = [],
+): LinePart[] {
   const clean = stripAnsi(rawLine);
 
-  // Fast path: no images on this line
-  if (!clean.includes("⬚⟪")) {
+  // Fast path: no placeholders on this line
+  if (!clean.includes("⬚⟪") && !clean.includes("🔗⟪")) {
     return [{ type: "text", content: rawLine }];
   }
 
   const isTableLine = TABLE_CHARS_RE.test(clean);
 
-  // Line contains image(s) — work with clean text for reliable parsing
+  // Parse all placeholders (images + links) in a single pass
   const parts: LinePart[] = [];
   let lastIndex = 0;
 
-  for (const match of clean.matchAll(new RegExp(IMG_PLACEHOLDER_RE.source, "g"))) {
+  for (const match of clean.matchAll(new RegExp(PLACEHOLDER_RE.source, "g"))) {
     const matchIndex = match.index!;
+    const isImage = !!match[1]; // ⬚
+    // const isLink = !!match[2]; // 🔗
+    const idx = parseInt(match[3]!, 10);
+    const text = match[4] || "";
 
-    // Text before this image
+    // Text before this placeholder
     if (matchIndex > lastIndex) {
       const textBefore = clean.slice(lastIndex, matchIndex);
       if (textBefore.trim()) {
@@ -496,26 +534,33 @@ export function parseLineSegments(rawLine: string, imageRegistry: ImageRegistryE
       }
     }
 
-    // Look up the actual src URL from the registry
-    const imgIdx = parseInt(match[1]!, 10);
-    const entry = imageRegistry[imgIdx];
-    const alt = match[2] || entry?.alt || "image";
-    const src = entry?.src || "";
-
-    parts.push({
-      type: "image",
-      content: alt,
-      src,
-      alt,
-      // For table lines, record the placeholder width so the renderer
-      // can pad the Image component to preserve column alignment.
-      tableWidth: isTableLine ? match[0].length : undefined,
-    });
+    if (isImage) {
+      const entry = imageRegistry[idx];
+      const alt = text || entry?.alt || "image";
+      const src = entry?.src || "";
+      parts.push({
+        type: "image",
+        content: alt,
+        src,
+        alt,
+        tableWidth: isTableLine ? match[0].length : undefined,
+      });
+    } else {
+      // Link placeholder
+      const entry = linkRegistry[idx];
+      const label = text || entry?.label || "";
+      const href = entry?.href || "";
+      parts.push({
+        type: "link",
+        content: label,
+        href,
+      });
+    }
 
     lastIndex = matchIndex + match[0].length;
   }
 
-  // Remaining text after last image
+  // Remaining text after last placeholder
   if (lastIndex < clean.length) {
     const textAfter = clean.slice(lastIndex);
     if (textAfter.trim()) {
@@ -531,32 +576,29 @@ export function parseLineSegments(rawLine: string, imageRegistry: ImageRegistryE
 export interface RenderResult {
   /** Terminal-formatted text (with ANSI codes), split into lines */
   lines: string[];
-  /** Each line parsed into segments (text + inline images) */
+  /** Each line parsed into segments (text + inline images + links) */
   parsedLines: LinePart[][];
-  /** Extracted links with their positions */
+  /** Extracted links with their positions (for link navigation) */
   links: ExtractedLink[];
-  /** Map from line index to link ID (for focusable links) */
-  linkLineMap: Map<number, string>;
 }
-
-/** Regex to find URLs in rendered text (stripping ANSI codes first) */
-const URL_REGEX = /https?:\/\/[^\s)\]>]+/g;
 
 /**
  * Render an HTML email body to terminal-formatted text.
  *
  * Pipeline:
  *   1. DOM preprocessing (cheerio) — sanitize, remove tracking pixels, unwrap layout tables
- *   2. Turndown — HTML → Markdown (images become ![alt](src) naturally)
- *   3. marked-terminal — Markdown → ANSI terminal text (images become ⬚⟪src⟫⟪alt⟫)
- *   4. Post-processing — collapse blank lines, parse inline segments, build link map
+ *   2. Turndown — HTML → Markdown (images become ![alt](src), links become 🔗⟪index⟫⟪label⟫)
+ *   3. marked-terminal — Markdown → ANSI terminal text (images become ⬚⟪index⟫⟪alt⟫)
+ *   4. Post-processing — collapse blank lines, parse inline segments, build link list
  */
 export function renderHtmlEmail(html: string, width: number = 80): RenderResult {
   // Step 1: DOM-based preprocessing (leaves <img> intact)
   const { html: cleanedHtml } = preprocessEmailDom(html);
 
   // Step 2: Convert HTML to Markdown via Turndown
-  const td = createTurndownService();
+  // Link registry collects href+label; placeholders use compact 🔗⟪index⟫⟪label⟫ format
+  const linkRegistry: LinkRegistryEntry[] = [];
+  const td = createTurndownService(linkRegistry);
   const markdown = td.turndown(cleanedHtml);
 
   // Step 3: Render Markdown to terminal text via marked-terminal
@@ -582,29 +624,25 @@ export function renderHtmlEmail(html: string, width: number = 80): RenderResult 
   while (lines.length > 0 && stripAnsi(lines[0]!).trim() === "") lines.shift();
   while (lines.length > 0 && stripAnsi(lines[lines.length - 1]!).trim() === "") lines.pop();
 
-  // Step 5: Parse each line into segments (text + inline images)
-  const parsedLines: LinePart[][] = lines.map(line => parseLineSegments(line, imageRegistry));
+  // Step 5: Parse each line into segments (text + images + links)
+  const parsedLines: LinePart[][] = lines.map(line =>
+    parseLineSegments(line, imageRegistry, linkRegistry),
+  );
 
-  // Step 6: Build link map (skip lines that contain images to avoid matching image URLs)
-  const linkLineMap = new Map<number, string>();
+  // Step 6: Build link list from parsed link parts (for link navigation)
   const links: ExtractedLink[] = [];
   let linkCounter = 0;
 
-  for (let i = 0; i < lines.length; i++) {
-    // Skip lines with inline images
-    if (parsedLines[i]!.some(p => p.type === "image")) continue;
-
-    const cleanForUrl = stripAnsi(lines[i]!);
-    const urlMatch = cleanForUrl.match(URL_REGEX);
-    if (urlMatch) {
-      const id = `link-${++linkCounter}`;
-      const href = urlMatch[0]!;
-      links.push({ id, href, lineIndex: i });
-      linkLineMap.set(i, id);
+  for (let i = 0; i < parsedLines.length; i++) {
+    for (const part of parsedLines[i]!) {
+      if (part.type === "link" && part.href) {
+        const id = `link-${++linkCounter}`;
+        links.push({ id, href: part.href, label: part.content, lineIndex: i });
+      }
     }
   }
 
-  return { lines, parsedLines, links, linkLineMap };
+  return { lines, parsedLines, links };
 }
 
 /**
@@ -616,7 +654,6 @@ export function renderPlainTextEmail(text: string): RenderResult {
     lines,
     parsedLines: lines.map(l => [{ type: "text" as const, content: l }]),
     links: [],
-    linkLineMap: new Map(),
   };
 }
 

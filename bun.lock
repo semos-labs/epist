@@ -5,7 +5,7 @@
     "": {
       "name": "epist",
       "dependencies": {
-        "@semos-labs/glyph": "^0.1.93",
+        "@semos-labs/glyph": "^0.1.96",
         "cheerio": "^1.2.0",
         "chrono-node": "^2.8.0",
         "drizzle-orm": "^0.45.1",
@@ -103,7 +103,7 @@
 
     "@selderee/plugin-htmlparser2": ["@selderee/plugin-htmlparser2@0.11.0", "", { "dependencies": { "domhandler": "^5.0.3", "selderee": "^0.11.0" } }, "sha512-P33hHGdldxGabLFjPPpaTxVolMrzrcegejx+0GxjrIb9Zv48D8yAIA/QTDR2dFl7Uz7urX8aX6+5bCZslr+gWQ=="],
 
-    "@semos-labs/glyph": ["@semos-labs/glyph@0.1.93", "", { "dependencies": { "react-reconciler": "^0.31.0", "string-width": "^7.2.0", "yoga-layout": "^3.2.1" }, "peerDependencies": { "react": "^18.0.0 || ^19.0.0" } }, "sha512-Z2QoJkCP/Sw1sOReQoboCNr9gmmh4ZdXL6qzvZeCNvAe05vqNeGoLd+JNTbFXcaoLAyW2j9Xcm/4SEHg1aadlg=="],
+    "@semos-labs/glyph": ["@semos-labs/glyph@0.1.96", "", { "dependencies": { "react-reconciler": "^0.31.0", "string-width": "^7.2.0", "yoga-layout": "^3.2.1" }, "peerDependencies": { "react": "^18.0.0 || ^19.0.0" } }, "sha512-l/Ni6/FvQqzf2ACUc+eLkSdp6Na1ky3fkzqudl8QcoVRO1MGXmFrIIrYqEclT7NYjgiXRSPDbbpuS4TPkKB6iA=="],
 
     "@sindresorhus/is": ["@sindresorhus/is@4.6.0", "", {}, "sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw=="],
 

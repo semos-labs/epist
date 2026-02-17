@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useEffect, useCallback } from "react";
-import { Box, Text, Image, ScrollView, Input, useApp, FocusScope, useFocusable, useScrollIntoView } from "@semos-labs/glyph";
+import { Box, Text, Image, ScrollView, Input, useApp, FocusScope, Link, useScrollIntoView } from "@semos-labs/glyph";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
   selectedEmailAtom,
@@ -63,28 +63,16 @@ import { formatEmailAddress, formatEmailAddresses, type CalendarEvent, type Emai
 import { icons } from "./icons.ts";
 import { renderHtmlEmail, renderPlainTextEmail, TABLE_CHARS_RE, type LinePart } from "../utils/htmlRenderer.ts";
 import { DateTime } from "luxon";
-import { openFile } from "../utils/files.ts";
-
-const InlineLink = React.memo(function InlineLink({ href, isActive, disabled }: { href: string; isActive: boolean; disabled: boolean }) {
-  const { ref, isFocused } = useFocusable({
-    disabled,
-    onKeyPress: (key) => {
-      if (key.name === "return" || key.name === " ") {
-        openFile(href);
-        return true;
-      }
-      return false;
-    },
-  });
-
-  const highlighted = isActive || isFocused;
-
+const InlineLink = React.memo(function InlineLink({ href, label, isActive, disabled }: { href: string; label?: string; isActive: boolean; disabled: boolean }) {
   return (
-    <Box ref={ref} focusable style={{ flexDirection: "row" }}>
-      <Text style={{ underline: true, bg: highlighted ? (isActive ? "cyan" : "blackBright") : undefined, color: isActive ? "black" : undefined }}>
-        {href}
-      </Text>
-    </Box>
+    <Link
+      href={href}
+      disabled={disabled}
+      style={{ underline: true, ...(isActive && { bg: "cyan", color: "black" }) }}
+      focusedStyle={!isActive ? { bg: "blackBright" } : undefined}
+    >
+      <Text>{label}</Text>
+    </Link>
   );
 });
 
@@ -452,7 +440,7 @@ function MessageCard({ email, isFocused, linkIndexOffset, activeLinkIndex, viewF
           <CalendarInviteSection
             event={email.calendarEvent}
             inviteFocused={isFocused}
-            onRsvp={() => {}}
+            onRsvp={() => { }}
           />
         </Box>
       )}
@@ -554,21 +542,12 @@ function CalendarInviteSection({ event, inviteFocused, onRsvp }: {
 // ===== Line System =====
 
 interface ExpandedLine {
-  /** Inline segments: text and image parts */
+  /** Inline segments: text, image, and link parts */
   parts: LinePart[];
   /** The raw rendered line (with ANSI codes) */
   rawContent: string;
   /** Index in the original lines[] */
   originalIndex: number;
-  /** If this line contains a focusable link */
-  linkHref?: string;
-}
-
-/** Split a rendered line around a URL, returning [before, after] */
-function splitAroundUrl(content: string, href: string): [string, string] {
-  const idx = content.indexOf(href);
-  if (idx === -1) return [content, ""];
-  return [content.slice(0, idx), content.slice(idx + href.length)];
 }
 
 // Strip ANSI codes for content analysis
@@ -679,12 +658,11 @@ function MessageContent({ email, linkIndexOffset, activeLinkIndex, viewFocused }
 
   const expandedLines: ExpandedLine[] = useMemo(() => {
     if (!renderResult) return [];
-    const { lines, parsedLines, linkLineMap, links } = renderResult;
+    const { lines, parsedLines } = renderResult;
     return lines.map((line, i) => ({
       parts: parsedLines[i] || [{ type: "text" as const, content: line }],
       rawContent: line,
       originalIndex: i,
-      linkHref: linkLineMap.has(i) ? links.find(l => l.id === linkLineMap.get(i))?.href : undefined,
     }));
   }, [renderResult]);
 
@@ -701,8 +679,9 @@ function MessageContent({ email, linkIndexOffset, activeLinkIndex, viewFocused }
       {segments.map((seg, segIdx) => {
         if (seg.kind === "quote") {
           const qi = quoteIdx++;
+          // Count links in quoted segments for global index tracking
           for (const item of seg.items) {
-            if (item.linkHref) linkCounter++;
+            linkCounter += item.parts.filter(p => p.type === "link").length;
           }
           return (
             <QuotedBlock
@@ -717,6 +696,7 @@ function MessageContent({ email, linkIndexOffset, activeLinkIndex, viewFocused }
         return seg.items.map((item, index) => {
           const key = `${seg.startIndex}-${index}`;
           const hasImages = item.parts.some(p => p.type === "image");
+          const hasLinks = item.parts.some(p => p.type === "link");
 
           // Line with inline image(s) — render each segment
           if (hasImages) {
@@ -744,6 +724,11 @@ function MessageContent({ email, linkIndexOffset, activeLinkIndex, viewFocused }
                         />
                       );
                     }
+                    if (part.type === "link" && part.href) {
+                      const globalIdx = linkIndexOffset + linkCounter;
+                      linkCounter++;
+                      return <InlineLink key={pi} href={part.href} label={part.content} isActive={activeLinkIndex === globalIdx} disabled={!viewFocused} />;
+                    }
                     return <Text key={pi}>{part.content}</Text>;
                   })}
                 </Box>
@@ -769,22 +754,29 @@ function MessageContent({ email, linkIndexOffset, activeLinkIndex, viewFocused }
                       />
                     );
                   }
+                  if (part.type === "link" && part.href) {
+                    const globalIdx = linkIndexOffset + linkCounter;
+                    linkCounter++;
+                    return <InlineLink key={pi} href={part.href} label={part.content} isActive={activeLinkIndex === globalIdx} disabled={!viewFocused} />;
+                  }
                   return <Text key={pi}>{part.content}</Text>;
                 })}
               </Box>
             );
           }
 
-          // Line with a link
-          if (item.linkHref) {
-            const globalIdx = linkIndexOffset + linkCounter;
-            linkCounter++;
-            const [before, after] = splitAroundUrl(item.rawContent, item.linkHref);
+          // Line with link(s) — render parts inline
+          if (hasLinks) {
             return (
               <Box key={key} style={{ flexDirection: "row" }}>
-                {before && <Text>{before}</Text>}
-                <InlineLink href={item.linkHref} isActive={activeLinkIndex === globalIdx} disabled={!viewFocused} />
-                {after && <Text>{after}</Text>}
+                {item.parts.map((part, pi) => {
+                  if (part.type === "link" && part.href) {
+                    const globalIdx = linkIndexOffset + linkCounter;
+                    linkCounter++;
+                    return <InlineLink key={pi} href={part.href} label={part.content} isActive={activeLinkIndex === globalIdx} disabled={!viewFocused} />;
+                  }
+                  return <Text key={pi}>{part.content}</Text>;
+                })}
               </Box>
             );
           }
