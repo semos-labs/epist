@@ -1,28 +1,29 @@
-import type { FocusContext } from "../state/atoms.ts";
+import { createKeybindRegistry, type KeybindDef } from "@semos-labs/glyph";
 
-export interface KeybindDef {
-  key: string;           // The key combo (e.g., "shift+d", "ctrl+u")
-  display: string;       // Human-readable display (e.g., "D", "Ctrl+u")
-  description: string;   // What it does
-  action: string;        // Action identifier
-  command?: string;      // Optional command name for command bar
-}
+// Re-export glyph's KeybindDef so consumers don't need to import from two places
+export type { KeybindDef };
 
-// Sub-mode scopes extend beyond FocusContext
+// All scopes used in the app
 export type KeybindScope =
-  | FocusContext
   | "global"
-  | "viewAttachments"   // Email view with attachment section focused
-  | "viewImageNav"      // Email view in image navigation mode
-  | "inlineReply"       // Quick inline reply box
-  | "moveToFolder"      // Move-to-folder overlay picker
-  | "composeAttachments" // Attachment management mode in compose/reply
-  | "help";             // Help dialog
+  | "list"
+  | "view"
+  | "viewAttachments"
+  | "viewImageNav"
+  | "inlineReply"
+  | "folders"
+  | "moveToFolder"
+  | "compose"
+  | "reply"
+  | "composeAttachments"
+  | "help";
 
 // ===== Central Registry =====
 // Every keybind in the app is defined here.
+// Note: ":" (command) and "/" (search) are handled by glyph's StatusBar component
+// and are NOT listed as explicit keybinds in any scope.
 
-export const KEYBIND_REGISTRY: Record<KeybindScope, KeybindDef[]> = {
+export const registry = createKeybindRegistry<KeybindScope>({
 
   // ── Global ─────────────────────────────────────────────
   // These fire regardless of list/view focus (but not in command/search/reply/overlays)
@@ -69,8 +70,6 @@ export const KEYBIND_REGISTRY: Record<KeybindScope, KeybindDef[]> = {
     { key: "escape", display: "Esc", description: "Clear selection", action: "clearBulk" },
 
     // Global-like (available in list context)
-    { key: ":", display: ":", description: "Open command bar", action: "openCommand" },
-    { key: "/", display: "/", description: "Search emails", action: "openSearch", command: "search" },
     { key: "?", display: "?", description: "Show keyboard shortcuts", action: "openHelp", command: "help" },
     { key: "c", display: "c", description: "Compose new email", action: "compose", command: "compose" },
 
@@ -138,8 +137,6 @@ export const KEYBIND_REGISTRY: Record<KeybindScope, KeybindDef[]> = {
     { key: "t", display: "t", description: "Maybe / Tentative", action: "rsvpTentative" },
 
     // Global-like (available in view context)
-    { key: ":", display: ":", description: "Open command bar", action: "openCommand" },
-    { key: "/", display: "/", description: "Search emails", action: "openSearch" },
     { key: "?", display: "?", description: "Show keyboard shortcuts", action: "openHelp" },
     { key: "c", display: "c", description: "Compose new email", action: "compose" },
   ],
@@ -233,21 +230,6 @@ export const KEYBIND_REGISTRY: Record<KeybindScope, KeybindDef[]> = {
     { key: "escape", display: "Esc", description: "Exit attachment mode", action: "exit" },
   ],
 
-  // ── Command Bar ────────────────────────────────────────
-  command: [
-    { key: "return", display: "Enter", description: "Execute command", action: "execute" },
-    { key: "escape", display: "Esc", description: "Cancel", action: "cancel" },
-    { key: "tab", display: "Tab", description: "Auto-complete", action: "complete" },
-  ],
-
-  // ── Search ─────────────────────────────────────────────
-  search: [
-    { key: "return", display: "Enter", description: "Confirm search", action: "select" },
-    { key: "escape", display: "Esc", description: "Close search", action: "close" },
-    { key: "ctrl+n", display: "Ctrl+n", description: "Next result", action: "next" },
-    { key: "ctrl+p", display: "Ctrl+p", description: "Previous result", action: "prev" },
-  ],
-
   // ── Help Dialog ────────────────────────────────────────
   help: [
     { key: "escape", display: "Esc", description: "Close help", action: "close" },
@@ -258,23 +240,10 @@ export const KEYBIND_REGISTRY: Record<KeybindScope, KeybindDef[]> = {
     { key: "ctrl+d", display: "Ctrl+d", description: "Page down", action: "pageDown" },
     { key: "ctrl+u", display: "Ctrl+u", description: "Page up", action: "pageUp" },
   ],
-};
-
-// ===== Helpers =====
-
-// Get keybinds for a scope, deduped by display key
-export function getKeybindsForScope(scope: KeybindScope): KeybindDef[] {
-  const keybinds = KEYBIND_REGISTRY[scope] || [];
-  const seen = new Set<string>();
-  return keybinds.filter((kb) => {
-    if (!kb.key || seen.has(kb.display)) return false;
-    seen.add(kb.display);
-    return true;
-  });
-}
+});
 
 // Scope titles for help dialog
-const SCOPE_TITLES: Partial<Record<KeybindScope, string>> = {
+export const SCOPE_TITLES: Partial<Record<KeybindScope, string>> = {
   list: "Email List",
   view: "Email View",
   viewAttachments: "Attachment Navigation",
@@ -285,96 +254,13 @@ const SCOPE_TITLES: Partial<Record<KeybindScope, string>> = {
   compose: "Compose",
   reply: "Reply",
   composeAttachments: "Attachment Management",
-  command: "Command Bar",
-  search: "Search",
   help: "Help",
   global: "Global",
 };
 
 // Related sub-mode scopes for each main context
-const RELATED_SCOPES: Partial<Record<KeybindScope, KeybindScope[]>> = {
+export const RELATED_SCOPES: Partial<Record<KeybindScope, KeybindScope[]>> = {
   view: ["viewAttachments", "viewImageNav", "inlineReply"],
   compose: ["composeAttachments"],
   reply: ["composeAttachments"],
 };
-
-// Get keybinds for help dialog — context + related sub-modes + global
-export function getKeybindsForHelp(context: FocusContext): { title: string; keybinds: KeybindDef[] }[] {
-  const sections: { title: string; keybinds: KeybindDef[] }[] = [];
-
-  // Context-specific keybinds
-  const contextKeybinds = getKeybindsForScope(context);
-  if (contextKeybinds.length > 0) {
-    sections.push({
-      title: SCOPE_TITLES[context] || context,
-      keybinds: contextKeybinds,
-    });
-  }
-
-  // Related sub-mode keybinds
-  const related = RELATED_SCOPES[context] || [];
-  for (const subScope of related) {
-    const subKeybinds = getKeybindsForScope(subScope);
-    if (subKeybinds.length > 0) {
-      sections.push({
-        title: SCOPE_TITLES[subScope] || subScope,
-        keybinds: subKeybinds,
-      });
-    }
-  }
-
-  // Global keybinds
-  sections.push({
-    title: "Global",
-    keybinds: getKeybindsForScope("global"),
-  });
-
-  return sections;
-}
-
-// Get all commands from registry (keybinds with command field)
-export function getAllCommands(): { name: string; description: string; action: string }[] {
-  const commands: { name: string; description: string; action: string }[] = [];
-  const seen = new Set<string>();
-
-  for (const scope of Object.keys(KEYBIND_REGISTRY) as KeybindScope[]) {
-    for (const kb of KEYBIND_REGISTRY[scope]) {
-      if (kb.command && !seen.has(kb.command)) {
-        seen.add(kb.command);
-        commands.push({
-          name: kb.command,
-          description: kb.description,
-          action: kb.action,
-        });
-      }
-    }
-  }
-
-  return commands.sort((a, b) => a.name.localeCompare(b.name));
-}
-
-// Find command by name
-export function findCommand(input: string): { name: string; action: string; args?: string } | null {
-  const trimmed = input.trim().toLowerCase();
-  if (!trimmed) return null;
-
-  const commands = getAllCommands();
-
-  // Exact match
-  const exact = commands.find((c) => c.name === trimmed);
-  if (exact) {
-    return { name: exact.name, action: exact.action };
-  }
-
-  // Parameterized commands
-  const parts = trimmed.split(/\s+/);
-  const cmdName = parts[0];
-  const args = parts.slice(1).join(" ");
-
-  const parameterized = commands.find((c) => c.name === cmdName);
-  if (parameterized) {
-    return { name: parameterized.name, action: parameterized.action, args: args || undefined };
-  }
-
-  return null;
-}

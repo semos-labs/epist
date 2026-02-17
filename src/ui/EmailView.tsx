@@ -28,8 +28,6 @@ import {
   deleteEmailAtom,
   markUnreadAtom,
   moveSelectionAtom,
-  openCommandAtom,
-  openSearchAtom,
   openHelpAtom,
   replyEmailAtom,
   replyAllEmailAtom,
@@ -58,7 +56,8 @@ import {
   resetLinkNavAtom,
   moveFocusedMessageAtom,
 } from "../state/actions.ts";
-import { ScopedKeybinds } from "../keybinds/useKeybinds.tsx";
+import { ScopedKeybinds } from "@semos-labs/glyph";
+import { registry } from "../keybinds/registry.ts";
 import { formatFullDate } from "../domain/time.ts";
 import { formatEmailAddress, formatEmailAddresses, type CalendarEvent, type Email, type Thread } from "../domain/email.ts";
 import { icons } from "./icons.ts";
@@ -99,8 +98,6 @@ function ViewKeybinds({ hasCalendarInvite }: { hasCalendarInvite?: boolean }) {
   const deleteEmail = useSetAtom(deleteEmailAtom);
   const markUnread = useSetAtom(markUnreadAtom);
   const moveSelection = useSetAtom(moveSelectionAtom);
-  const openCommand = useSetAtom(openCommandAtom);
-  const openSearch = useSetAtom(openSearchAtom);
   const openHelp = useSetAtom(openHelpAtom);
   const reply = useSetAtom(replyEmailAtom);
   const replyAll = useSetAtom(replyAllEmailAtom);
@@ -205,26 +202,24 @@ function ViewKeybinds({ hasCalendarInvite }: { hasCalendarInvite?: boolean }) {
     rsvpTentative: hasCalendarInvite ? () => rsvp("TENTATIVE") : undefined,
 
     // Global-like
-    openCommand: () => openCommand(),
-    openSearch: () => openSearch(),
     openHelp: () => openHelp(),
     compose: () => compose(),
   }), [scrollView, setFocus, toggleFocus, toggleStar, archive, deleteEmail, markUnread,
     moveSelection, reply, replyAll, forward, compose, toggleHeaders, toggleDebugHtml, copyHtmlToClipboard, toggleAttachments,
-    toggleImageNav, moveToFolder, undo, inlineReply, rsvp, openCommand, openSearch,
+    toggleImageNav, moveToFolder, undo, inlineReply, rsvp,
     openHelp, hasCalendarInvite, emailLinks, activeLinkIdx, moveLinkFocus, openActiveLink,
     moveFocusedMessage]);
 
   // Determine which keybind scope to render based on active sub-mode
   if (attachmentsFocused) {
-    return <ScopedKeybinds scope="viewAttachments" handlers={attachmentHandlers} />;
+    return <ScopedKeybinds registry={registry} scope="viewAttachments" handlers={attachmentHandlers} />;
   }
 
   if (imageNavMode) {
-    return <ScopedKeybinds scope="viewImageNav" handlers={imageNavHandlers} />;
+    return <ScopedKeybinds registry={registry} scope="viewImageNav" handlers={imageNavHandlers} />;
   }
 
-  return <ScopedKeybinds scope="view" handlers={viewHandlers} />;
+  return <ScopedKeybinds registry={registry} scope="view" handlers={viewHandlers} />;
 }
 
 /** Subject bar at the top of the email view */
@@ -237,7 +232,7 @@ function SubjectBar() {
     <Box style={{ flexDirection: "row", gap: 1, bg: "white", paddingX: 1 }}>
       {email.labelIds.includes("STARRED") && <Text>{icons.star}</Text>}
       <Text style={{ bold: true }}>{thread.subject}</Text>
-      {thread.count > 1 && <Text dim>({thread.count})</Text>}
+      {thread.count > 1 && <Text style={{ dim: true }}>({thread.count})</Text>}
     </Box>
   );
 }
@@ -258,13 +253,13 @@ function MessageCardHeader({ email, expanded }: {
         <Box style={{ flexDirection: "row" }}>
           <Text style={{ bold: true }}>{fromName}</Text>
           <Text style={{ flexGrow: 1 }}></Text>
-          <Text dim>{dateDisplay}</Text>
+          <Text style={{ dim: true }}>{dateDisplay}</Text>
         </Box>
         <Box style={{ flexDirection: "row" }}>
-          <Text dim>to </Text>
-          <Text dim>{formatEmailAddresses(email.to)}</Text>
+          <Text style={{ dim: true }}>to </Text>
+          <Text style={{ dim: true }}>{formatEmailAddresses(email.to)}</Text>
           <Text style={{ flexGrow: 1 }}></Text>
-          <Text dim>[i:expand]</Text>
+          <Text style={{ dim: true }}>[i:expand]</Text>
         </Box>
       </Box>
     );
@@ -276,21 +271,21 @@ function MessageCardHeader({ email, expanded }: {
       {/* From */}
       <Box style={{ flexDirection: "row" }}>
         <Text style={{ bold: true }}>{fromName}</Text>
-        {email.from.name && <Text dim> {fromEmail}</Text>}
+        {email.from.name && <Text style={{ dim: true }}> {fromEmail}</Text>}
         <Text style={{ flexGrow: 1 }}></Text>
-        <Text dim>{dateDisplay}</Text>
+        <Text style={{ dim: true }}>{dateDisplay}</Text>
       </Box>
 
       {/* To */}
       <Box style={{ flexDirection: "row" }}>
-        <Text dim>to </Text>
+        <Text style={{ dim: true }}>to </Text>
         <Text style={{ bold: true }}>{formatEmailAddresses(email.to)}</Text>
       </Box>
 
       {/* CC */}
       {email.cc && email.cc.length > 0 && (
         <Box style={{ flexDirection: "row" }}>
-          <Text dim>cc </Text>
+          <Text style={{ dim: true }}>cc </Text>
           <Text>{formatEmailAddresses(email.cc)}</Text>
         </Box>
       )}
@@ -298,7 +293,7 @@ function MessageCardHeader({ email, expanded }: {
       {/* BCC */}
       {email.bcc && email.bcc.length > 0 && (
         <Box style={{ flexDirection: "row" }}>
-          <Text dim>bcc </Text>
+          <Text style={{ dim: true }}>bcc </Text>
           <Text>{formatEmailAddresses(email.bcc)}</Text>
         </Box>
       )}
@@ -306,14 +301,14 @@ function MessageCardHeader({ email, expanded }: {
       {/* Reply-To if different */}
       {email.replyTo && email.replyTo.email !== email.from.email && (
         <Box style={{ flexDirection: "row" }}>
-          <Text dim>reply-to </Text>
+          <Text style={{ dim: true }}>reply-to </Text>
           <Text>{formatEmailAddress(email.replyTo)}</Text>
         </Box>
       )}
 
       {/* Collapse hint */}
       <Box style={{ flexDirection: "row", justifyContent: "flex-end" }}>
-        <Text dim>[i:collapse]</Text>
+        <Text style={{ dim: true }}>[i:collapse]</Text>
       </Box>
     </Box>
   );
@@ -331,8 +326,8 @@ function MessageAttachments({ email }: { email: Email }) {
     return (
       <Box style={{ flexDirection: "row", paddingX: 1, gap: 1 }}>
         <Text>{icons.attachment}</Text>
-        <Text dim>{email.attachments.length} attachment{email.attachments.length > 1 ? "s" : ""}</Text>
-        <Text dim>[a:show]</Text>
+        <Text style={{ dim: true }}>{email.attachments.length} attachment{email.attachments.length > 1 ? "s" : ""}</Text>
+        <Text style={{ dim: true }}>[a:show]</Text>
       </Box>
     );
   }
@@ -352,7 +347,7 @@ function MessageAttachments({ email }: { email: Email }) {
               {email.attachments.length} attachment{email.attachments.length > 1 ? "s" : ""}:
             </Text>
           </Box>
-          <Text dim>j/k:nav o:preview s:save S:save all a:exit</Text>
+          <Text style={{ dim: true }}>j/k:nav o:preview s:save S:save all a:exit</Text>
         </Box>
         {email.attachments.map((attachment, index) => {
           const isSelected = index === selectedIndex;
@@ -369,7 +364,7 @@ function MessageAttachments({ email }: { email: Email }) {
                 {isSelected ? "> " : "  "}{attachment.filename}
               </Text>
               {attachment.size && (
-                <Text dim={!isSelected}>
+                <Text style={{ dim: !isSelected }}>
                   {" "}({formatFileSize(attachment.size)})
                 </Text>
               )}
@@ -385,8 +380,8 @@ function MessageAttachments({ email }: { email: Email }) {
 function MessageCardActions() {
   return (
     <Box style={{ flexDirection: "row", justifyContent: "flex-end", paddingX: 1, gap: 2 }}>
-      <Text dim>{icons.reply}</Text>
-      <Text dim>{icons.forward}</Text>
+      <Text style={{ dim: true }}>{icons.reply}</Text>
+      <Text style={{ dim: true }}>{icons.forward}</Text>
     </Box>
   );
 }
@@ -524,17 +519,17 @@ function CalendarInviteSection({ event, inviteFocused, onRsvp }: {
 
   return (
     <Box style={{ flexDirection: "column", bg: "blackBright", paddingX: 1, marginBottom: 1 }}>
-      <Text dim>{isCancelled ? "Cancelled: " : ""}{formatEventDateCompact(event.start, event.end, event.allDay)}</Text>
+      <Text style={{ dim: true }}>{isCancelled ? "Cancelled: " : ""}{formatEventDateCompact(event.start, event.end, event.allDay)}</Text>
       <Text style={{ bold: true }}>{event.summary}</Text>
       {locationLine && (
         <Box style={{ flexDirection: "row", gap: 1 }}>
-          <Text dim>{icons.location}</Text>
+          <Text style={{ dim: true }}>{icons.location}</Text>
           <Text>{locationLine}</Text>
         </Box>
       )}
       {organizerDisplay && (
         <Box style={{ flexDirection: "row", gap: 1 }}>
-          <Text dim>{icons.people}</Text>
+          <Text style={{ dim: true }}>{icons.people}</Text>
           <Text>{organizerDisplay}</Text>
         </Box>
       )}
@@ -551,7 +546,7 @@ function CalendarInviteSection({ event, inviteFocused, onRsvp }: {
           </Text>
         </Box>
       )}
-      {isCancelled && <Text dim>This event has been cancelled.</Text>}
+      {isCancelled && <Text style={{ dim: true }}>This event has been cancelled.</Text>}
     </Box>
   );
 }
@@ -644,7 +639,7 @@ function QuotedBlock({ items, quoteIndex }: { items: ExpandedLine[]; quoteIndex:
   if (!expanded) {
     return (
       <Box style={{ flexDirection: "row" }}>
-        <Text dim>
+        <Text style={{ dim: true }}>
           ··· {items.length} quoted {items.length === 1 ? "line" : "lines"} ···
         </Text>
       </Box>
@@ -654,11 +649,11 @@ function QuotedBlock({ items, quoteIndex }: { items: ExpandedLine[]; quoteIndex:
   return (
     <>
       <Box style={{ flexDirection: "row" }}>
-        <Text dim>··· quoted text ···</Text>
+        <Text style={{ dim: true }}>··· quoted text ···</Text>
       </Box>
       {items.map((item, idx) => (
         <Box key={`q${quoteIndex}-${idx}`} style={{ flexDirection: "row" }}>
-          <Text dim>{item.parts[0]?.content || item.rawContent || " "}</Text>
+          <Text style={{ dim: true }}>{item.parts[0]?.content || item.rawContent || " "}</Text>
         </Box>
       ))}
     </>
@@ -906,8 +901,8 @@ function EmptyState() {
         gap: 1,
       }}
     >
-      <Text dim>No email selected</Text>
-      <Text dim style={{ fontSize: 1 }}>
+      <Text style={{ dim: true }}>No email selected</Text>
+      <Text style={{ dim: true, fontSize: 1 }}>
         Press j/k to navigate, Enter to open
       </Text>
     </Box>
@@ -945,7 +940,7 @@ function InlineReply() {
       }}>
         <Box style={{ flexDirection: "row", justifyContent: "space-between" }}>
           <Text style={{ bold: true, color: "cyan" }}>{icons.reply} Quick Reply</Text>
-          <Text dim>Ctrl+S:send | Ctrl+F:expand | Esc:cancel</Text>
+          <Text style={{ dim: true }}>Ctrl+S:send | Ctrl+F:expand | Esc:cancel</Text>
         </Box>
         <Input
           value={content}
@@ -955,7 +950,7 @@ function InlineReply() {
           style={{ width: "100%", height: 3 }}
           focusedStyle={{ bg: "blackBright" }}
         />
-        <ScopedKeybinds scope="inlineReply" handlers={handlers} priority />
+        <ScopedKeybinds registry={registry} scope="inlineReply" handlers={handlers} priority />
       </Box>
     </FocusScope>
   );

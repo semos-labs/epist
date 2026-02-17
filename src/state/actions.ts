@@ -11,12 +11,8 @@ import {
   focusAtom,
   currentLabelAtom,
   overlayStackAtom,
-  commandInputAtom,
-  commandSelectedIndexAtom,
   searchQueryAtom,
   searchSelectedIndexAtom,
-  messageAtom,
-  messageVisibleAtom,
   listScrollOffsetAtom,
   viewScrollOffsetAtom,
   expandedHeadersAtom,
@@ -81,7 +77,6 @@ import {
   unreadSortSnapshotAtom,
   type FocusContext,
   type Overlay,
-  type MessageType,
   type UserLabel,
 } from "./atoms.ts";
 import { openFile, quickLook, saveFile } from "../utils/files.ts";
@@ -89,9 +84,9 @@ import { saveDraft, deleteDraft } from "../utils/drafts.ts";
 import { loadConfig, saveConfig, resolvePath, type EpistConfig } from "../utils/config.ts";
 import { collectFiles, filterFiles, clearFileCache } from "../utils/fzf.ts";
 import { formatEmailAddress, formatEmailAddresses, isStarred, isUnread, FOLDER_LABELS, type Email, type LabelId, type AttendeeStatus } from "../domain/email.ts";
-import { findCommand, getAllCommands } from "../keybinds/registry.ts";
 import { getProviderOrNull } from "../api/provider.ts";
 import { searchLocalFTS, rebuildFtsIndex, updateCachedEmailLabels } from "../lib/database.ts";
+import { showStatusBarMessage } from "../lib/statusBarBridge.ts";
 
 // ===== Configuration =====
 
@@ -977,14 +972,11 @@ export const popOverlayAtom = atom(
   }
 );
 
-// Open command bar
+// Open command bar — now handled by glyph's StatusBar (kept for backwards compat)
 export const openCommandAtom = atom(
   null,
-  (get, set) => {
-    set(commandInputAtom, "");
-    set(commandSelectedIndexAtom, 0);
-    set(focusAtom, "command");
-    set(messageVisibleAtom, false);
+  (_get, _set) => {
+    // No-op: command mode is handled internally by glyph's StatusBar
   }
 );
 
@@ -1011,44 +1003,11 @@ export const openHelpAtom = atom(
 
 // ===== Command Actions =====
 
-// Execute command from command bar
-export const executeCommandAtom = atom(
+// Dispatch a command action — called by glyph's StatusBar onCommand callback
+export const dispatchCommandAtom = atom(
   null,
-  (get, set) => {
-    const input = get(commandInputAtom);
-    const selectedIndex = get(commandSelectedIndexAtom);
-    
-    // If input is empty, execute selected command from palette
-    const allCommands = getAllCommands();
-    const firstWord = input.toLowerCase().trim().split(/\s+/)[0] ?? "";
-    const filteredCommands = firstWord
-      ? allCommands.filter(cmd => {
-          const cmdName = cmd.name.split(" ")[0] ?? "";
-          return cmdName.toLowerCase().includes(firstWord) ||
-            cmd.description.toLowerCase().includes(firstWord);
-        })
-      : allCommands;
-    
-    // Get command to execute — prefer palette selection, fall back to text input
-    let command: ReturnType<typeof findCommand>;
-    if (filteredCommands[selectedIndex]) {
-      command = { 
-        name: filteredCommands[selectedIndex]!.name, 
-        action: filteredCommands[selectedIndex]!.action 
-      };
-    } else {
-      command = findCommand(input);
-    }
-    
-    if (!command) {
-      set(showMessageAtom, { text: `Unknown command: ${input}`, type: "error" });
-      set(focusAtom, "list");
-      set(messageVisibleAtom, true);
-      return;
-    }
-    
-    // Execute the command
-    switch (command.action) {
+  (get, set, { action, args }: { action: string; args?: string }) => {
+    switch (action) {
       case "quit":
         // Will be handled by app
         break;
@@ -1128,17 +1087,13 @@ export const executeCommandAtom = atom(
         set(reindexAtom);
         break;
       default:
-        set(showMessageAtom, { text: `Executed: ${command.name}`, type: "info" });
+        set(showMessageAtom, { text: `Executed: ${action}`, type: "info" });
     }
-    
-    // Close command bar — only reset to list if focus wasn't changed by the action
-    const currentFocus = get(focusAtom);
-    if (currentFocus === "command") {
-      set(focusAtom, "list");
-    }
-    set(messageVisibleAtom, true);
   }
 );
+
+// Legacy alias — kept for any remaining references
+export const executeCommandAtom = dispatchCommandAtom;
 
 // ===== Search Actions =====
 
@@ -1264,29 +1219,11 @@ export const closeSearchAtom = atom(
 
 // ===== Message Actions =====
 
-// Show message
+// Show message — delegates to glyph's StatusBar via bridge
 export const showMessageAtom = atom(
   null,
-  (get, set, message: { text: string; type: MessageType }) => {
-    set(messageAtom, {
-      id: Date.now().toString(),
-      text: message.text,
-      type: message.type,
-    });
-    set(messageVisibleAtom, true);
-    
-    // Auto-dismiss after 3 seconds
-    setTimeout(() => {
-      set(messageVisibleAtom, false);
-    }, 3000);
-  }
-);
-
-// Dismiss message
-export const dismissMessageAtom = atom(
-  null,
-  (get, set) => {
-    set(messageVisibleAtom, false);
+  (_get, _set, message: { text: string; type: "info" | "success" | "warning" | "error" | "progress" }) => {
+    showStatusBarMessage({ text: message.text, type: message.type });
   }
 );
 

@@ -58,20 +58,20 @@ function FileList({
     <>
       {beforeLines.length > 0 && (
         <Box style={{ paddingX: 1, height: beforeLines.length }}>
-          <Text wrap="truncate">{beforeLines.join("\n")}</Text>
+          <Text style={{ wrap: "truncate" }}>{beforeLines.join("\n")}</Text>
         </Box>
       )}
       {selectedPath && (
         <Box style={{ flexDirection: "row", paddingX: 1, height: 1, bg: "white" }}>
           <Text style={{ color: selectedMarked ? "green" : "black" }}>{selectedMark} </Text>
-          <Text style={{ color: "black" }} wrap="truncate">
+          <Text style={{ color: "black", wrap: "truncate" }}>
             {"  " + selectedFilename}
           </Text>
         </Box>
       )}
       {afterLines.length > 0 && (
         <Box style={{ paddingX: 1, height: afterLines.length }}>
-          <Text wrap="truncate">{afterLines.join("\n")}</Text>
+          <Text style={{ wrap: "truncate" }}>{afterLines.join("\n")}</Text>
         </Box>
       )}
     </>
@@ -175,14 +175,14 @@ export function AttachmentPicker() {
           <FocusScope trap>
             {/* Header */}
             <Box style={{ paddingX: 1, height: 1, flexDirection: "row" }}>
-              <Text bold color="cyan">{icons.attachment} Attach Files</Text>
+              <Text style={{ bold: true, color: "cyan" }}>{icons.attachment} Attach Files</Text>
               <Box style={{ flexGrow: 1 }} />
-              {selectedFiles.size > 0 && <Text color="green">{selectedFiles.size} selected</Text>}
+              {selectedFiles.size > 0 && <Text style={{ color: "green" }}>{selectedFiles.size} selected</Text>}
             </Box>
 
             {/* Search input */}
             <Box style={{ paddingX: 1, height: 1, flexDirection: "row" }}>
-              <Text dim>/ </Text>
+              <Text style={{ dim: true }}>/ </Text>
               <Input
                 value={query}
                 onChange={handleQueryChange}
@@ -197,7 +197,7 @@ export function AttachmentPicker() {
             <Box style={{ height: listHeight, clip: true }}>
               {results.length === 0 ? (
                 <Box style={{ paddingX: 1 }}>
-                  <Text dim>{query ? "No matches" : "No files found"}</Text>
+                  <Text style={{ dim: true }}>{query ? "No matches" : "No files found"}</Text>
                 </Box>
               ) : (
                 <FileList
@@ -212,9 +212,9 @@ export function AttachmentPicker() {
 
             {/* Footer */}
             <Box style={{ paddingX: 1, height: 1, flexDirection: "row" }}>
-              <Text dim>↑↓:nav Tab:mark Enter:add Esc:close</Text>
+              <Text style={{ dim: true }}>↑↓:nav Tab:mark Enter:add Esc:close</Text>
               <Box style={{ flexGrow: 1 }} />
-              {results.length > 0 && <Text dim>{selectedIndex + 1}/{results.length}</Text>}
+              {results.length > 0 && <Text style={{ dim: true }}>{selectedIndex + 1}/{results.length}</Text>}
             </Box>
           </FocusScope>
         </Box>

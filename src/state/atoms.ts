@@ -23,15 +23,6 @@ export interface Overlay {
   prevFocus?: FocusContext;
 }
 
-// ===== Message System =====
-export type MessageType = "info" | "success" | "warning" | "error";
-
-export interface Message {
-  id: string;
-  text: string;
-  type: MessageType;
-}
-
 // ===== Core Atoms =====
 
 // All emails
@@ -170,12 +161,6 @@ export const searchSelectedIndexAtom = atom<number>(0);
 // Overlay stack
 export const overlayStackAtom = atom<Overlay[]>([]);
 
-// Command input
-export const commandInputAtom = atom<string>("");
-
-// Command palette selection index
-export const commandSelectedIndexAtom = atom<number>(0);
-
 // Undo stack — stores previous email states for reversible actions
 export interface UndoEntry {
   description: string;
@@ -184,12 +169,6 @@ export interface UndoEntry {
   timestamp: number;
 }
 export const undoStackAtom = atom<UndoEntry[]>([]);
-
-// Status message (vim-style)
-export const messageAtom = atom<Message | null>(null);
-
-// Message visibility
-export const messageVisibleAtom = atom<boolean>(true);
 
 // Scroll offset for email list
 export const listScrollOffsetAtom = atom<number>(0);

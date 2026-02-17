@@ -139,7 +139,7 @@ export function MoveToFolderPicker() {
         {/* Folder list */}
         {folders.length === 0 ? (
           <Box style={{ paddingX: 1 }}>
-            <Text dim>No matching folders</Text>
+            <Text style={{ dim: true }}>No matching folders</Text>
           </Box>
         ) : (
           <Box style={{ height: listHeight }}>

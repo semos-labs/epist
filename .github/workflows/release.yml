@@ -47,7 +47,7 @@ jobs:
 
       - name: Build binary
         run: |
-          bun build --compile --target=${{ matrix.target }} src/index.tsx --outfile ${{ matrix.artifact }} \
+          bun build --compile --minify --target=${{ matrix.target }} src/index.tsx --outfile ${{ matrix.artifact }} \
             --define __epist_GOOGLE_CLIENT_ID__="'${{ secrets.GOOGLE_CLIENT_ID }}'" \
             --define __epist_GOOGLE_CLIENT_SECRET__="'${{ secrets.GOOGLE_CLIENT_SECRET }}'"
         env:

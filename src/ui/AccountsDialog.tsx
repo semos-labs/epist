@@ -338,7 +338,7 @@ export function AccountsDialog() {
             }}
           >
             <Text style={{ color: "cyan", bold: true }}>Accounts</Text>
-            <Text dim>
+            <Text style={{ dim: true }}>
               {accounts.length} account{accounts.length !== 1 ? "s" : ""}
             </Text>
           </Box>
@@ -454,7 +454,7 @@ export function AccountsDialog() {
                     {isPrimary ? (
                       <Text style={{ color: "green" }}>✓ Primary account</Text>
                     ) : (
-                      <Text dim>Not primary</Text>
+                      <Text style={{ dim: true }}>Not primary</Text>
                     )}
                   </Box>
 
@@ -494,7 +494,7 @@ export function AccountsDialog() {
                         <Text style={{ color: "white" }}>
                           {imapConfig.imap.host}:{imapConfig.imap.port}
                         </Text>
-                        <Text dim>({imapConfig.imap.security})</Text>
+                        <Text style={{ dim: true }}>({imapConfig.imap.security})</Text>
                       </Box>
                       {imapConfig.smtp && (
                         <Box style={{ flexDirection: "row", gap: 1 }}>
@@ -502,7 +502,7 @@ export function AccountsDialog() {
                           <Text style={{ color: "white" }}>
                             {imapConfig.smtp.host}:{imapConfig.smtp.port}
                           </Text>
-                          <Text dim>({imapConfig.smtp.security})</Text>
+                          <Text style={{ dim: true }}>({imapConfig.smtp.security})</Text>
                         </Box>
                       )}
                       <Box style={{ flexDirection: "row", gap: 1 }}>
@@ -524,7 +524,7 @@ export function AccountsDialog() {
                             ✗ {error ? error.slice(0, 30) : "Failed"}
                           </Text>
                         ) : (
-                          <Text dim>Press t to test</Text>
+                          <Text style={{ dim: true }}>Press t to test</Text>
                         )}
                       </Box>
                     </>
@@ -545,7 +545,7 @@ export function AccountsDialog() {
 
           {/* Footer */}
           <Box style={{ flexDirection: "row", gap: 2, paddingTop: 1 }}>
-            <Text dim>
+            <Text style={{ dim: true }}>
               {editingName
                 ? "Enter:save  Esc:cancel"
                 : showDeleteConfirm

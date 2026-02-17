@@ -27,8 +27,6 @@ import {
   deleteEmailAtom,
   markUnreadAtom,
   openEmailAtom,
-  openCommandAtom,
-  openSearchAtom,
   openHelpAtom,
   replyEmailAtom,
   replyAllEmailAtom,
@@ -44,7 +42,8 @@ import {
   bulkMarkReadAtom,
   bulkToggleStarAtom,
 } from "../state/actions.ts";
-import { ScopedKeybinds } from "../keybinds/useKeybinds.tsx";
+import { ScopedKeybinds } from "@semos-labs/glyph";
+import { registry } from "../keybinds/registry.ts";
 import { formatEmailDate } from "../domain/time.ts";
 import { formatEmailAddress, isUnread, isStarred, hasAttachments, type Email, type Thread } from "../domain/email.ts";
 import { icons } from "./icons.ts";
@@ -84,9 +83,9 @@ function ThreadItem({ thread, isSelected, isFocused, isLast, isBulkSelected }: T
               color: isActive ? "black" : (hasUnread ? "white" : undefined),
               bold: hasUnread,
               flexGrow: 1, 
-              flexShrink: 1 
+              flexShrink: 1,
+              wrap: "truncate",
             }}
-            wrap="truncate"
           >
             {subject}
           </Text>
@@ -118,9 +117,9 @@ function ThreadItem({ thread, isSelected, isFocused, isLast, isBulkSelected }: T
               dim: !isActive, 
               color: isActive ? "black" : undefined,
               flexGrow: 1, 
-              flexShrink: 1 
+              flexShrink: 1,
+              wrap: "truncate",
             }}
-            wrap="truncate"
           >
             {fromName}
           </Text>
@@ -145,8 +144,6 @@ function ListKeybinds() {
   const deleteEmail = useSetAtom(deleteEmailAtom);
   const markUnread = useSetAtom(markUnreadAtom);
   const openEmail = useSetAtom(openEmailAtom);
-  const openCommand = useSetAtom(openCommandAtom);
-  const openSearch = useSetAtom(openSearchAtom);
   const openHelp = useSetAtom(openHelpAtom);
   const reply = useSetAtom(replyEmailAtom);
   const replyAll = useSetAtom(replyAllEmailAtom);
@@ -205,15 +202,13 @@ function ListKeybinds() {
     clearBulk: bulkMode ? () => clearBulk() : undefined,
 
     // Global-like
-    openCommand: () => openCommand(),
-    openSearch: () => openSearch(),
     openHelp: () => openHelp(),
     compose: () => compose(),
   }), [bulkMode, moveSelection, openEmail, toggleFocus, toggleStar, archive, deleteEmail, markUnread,
        reply, replyAll, forward, compose, moveToFolder, undo, toggleSelection, selectAll, clearBulk,
-       openCommand, openSearch, openHelp, bStar, bArchive, bDelete, bMarkRead]);
+       openHelp, bStar, bArchive, bDelete, bMarkRead]);
 
-  return <ScopedKeybinds scope="list" handlers={handlers} />;
+  return <ScopedKeybinds registry={registry} scope="list" handlers={handlers} />;
 }
 
 export function EmailList() {
@@ -268,7 +263,7 @@ export function EmailList() {
     >
       {/* Count indicator */}
       <Box style={{ flexDirection: "row", justifyContent: "flex-end", paddingX: 1 }}>
-        <Text dim>
+        <Text style={{ dim: true }}>
           {bulkMode ? `${bulkSelectedIds.size} selected · ` : ""}
           {unreadCount > 0 ? `${unreadCount} unread · ` : ""}{totalCount} threads
         </Text>
@@ -278,7 +273,7 @@ export function EmailList() {
       <Box style={{ flexGrow: 1, flexDirection: "column", paddingX: 1 }}>
         {visibleThreads.length === 0 ? (
           <Box style={{ paddingTop: 1 }}>
-            <Text dim>No emails</Text>
+            <Text style={{ dim: true }}>No emails</Text>
           </Box>
         ) : (
           visibleThreads.map((thread, index) => {
@@ -289,7 +284,7 @@ export function EmailList() {
               <React.Fragment key={thread.id}>
                 {showSeparator && (
                   <Box style={{ flexDirection: "row", alignItems: "center", paddingY: 0 }}>
-                    <Text dim>{"─".repeat(listWidth - 4)}</Text>
+                    <Text style={{ dim: true }}>{"─".repeat(listWidth - 4)}</Text>
                   </Box>
                 )}
                 <ThreadItem
@@ -308,7 +303,7 @@ export function EmailList() {
       {/* Scroll indicator */}
       {threads.length > visibleCount && (
         <Box style={{ paddingX: 1 }}>
-          <Text dim>
+          <Text style={{ dim: true }}>
             {scrollOffset > 0 ? icons.arrowUp : " "}
             {scrollOffset + visibleCount < threads.length ? icons.arrowDown : " "}
             {" "}{scrollOffset + 1}-{Math.min(scrollOffset + visibleCount, threads.length)}/{threads.length}

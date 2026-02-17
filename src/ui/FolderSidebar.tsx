@@ -15,7 +15,8 @@ import {
   toggleFolderSidebarAtom,
   changeLabelAtom,
 } from "../state/actions.ts";
-import { ScopedKeybinds } from "../keybinds/useKeybinds.tsx";
+import { ScopedKeybinds } from "@semos-labs/glyph";
+import { registry } from "../keybinds/registry.ts";
 import {
   FOLDER_LABELS,
   CATEGORY_LABELS,
@@ -187,7 +188,7 @@ export function FolderSidebar() {
   return (
     <FocusScope trap>
       <Box style={{ width: 22, flexDirection: "column", height: "100%" }}>
-        <ScopedKeybinds scope="folders" handlers={handlers} />
+        <ScopedKeybinds registry={registry} scope="folders" handlers={handlers} />
 
         <Box style={{ paddingX: 1, borderBottomWidth: 1, borderStyle: "single", borderColor: "gray" }}>
           <Text style={{ bold: true }}>Folders</Text>
@@ -200,7 +201,7 @@ export function FolderSidebar() {
               return (
                 <React.Fragment key={CATEGORIES_TOGGLE_ID}>
                   <Box style={{ paddingX: 1 }}>
-                    <Text dim>{'─'.repeat(18)}</Text>
+                    <Text style={{ dim: true }}>{'─'.repeat(18)}</Text>
                   </Box>
                   <Button
                     ref={(el: any) => { buttonRefs.current[index] = el; }}
@@ -212,9 +213,9 @@ export function FolderSidebar() {
                     } as any}
                     focusedStyle={{ bg: "white" } as any}
                   >
-                    <Text dim>{item.expanded ? "▾" : "▸"} </Text>
-                    <Text dim style={{ flexGrow: 1 }}>Categories</Text>
-                    <Text dim>{item.expanded ? "←" : "→"}</Text>
+                    <Text style={{ dim: true }}>{item.expanded ? "▾" : "▸"} </Text>
+                    <Text style={{ dim: true, flexGrow: 1 }}>Categories</Text>
+                    <Text style={{ dim: true }}>{item.expanded ? "←" : "→"}</Text>
                   </Button>
                 </React.Fragment>
               );
@@ -230,7 +231,7 @@ export function FolderSidebar() {
               <React.Fragment key={`${item.id}-${index}`}>
                 {needsSeparator && (
                   <Box style={{ paddingX: 1 }}>
-                    <Text dim>{'─'.repeat(18)}</Text>
+                    <Text style={{ dim: true }}>{'─'.repeat(18)}</Text>
                   </Box>
                 )}
                 <SidebarItemButton
@@ -264,7 +265,7 @@ export function FolderSidebar() {
         )}
 
         <Box style={{ paddingX: 1 }}>
-          <Text dim>↑↓:nav Space/→:expand ↵:open Esc:close</Text>
+          <Text style={{ dim: true }}>↑↓:nav Space/→:expand ↵:open Esc:close</Text>
         </Box>
       </Box>
     </FocusScope>
@@ -305,9 +306,9 @@ function SidebarItemButton({
       focusedStyle={{ bg: "white" } as any}
     >
       {item.type === "system" ? (
-        <Text dim={!isCurrent}>{item.icon} </Text>
+        <Text style={{ dim: !isCurrent }}>{item.icon} </Text>
       ) : item.type === "category" ? (
-        <Text dim={!isCurrent}>{item.icon} </Text>
+        <Text style={{ dim: !isCurrent }}>{item.icon} </Text>
       ) : (
         <Text style={{ color: item.color || "white" }}>● </Text>
       )}

@@ -42,7 +42,8 @@ import {
   acceptSuggestionAtom,
   setReplyAccountAtom,
 } from "../state/actions.ts";
-import { ScopedKeybinds } from "../keybinds/useKeybinds.tsx";
+import { ScopedKeybinds } from "@semos-labs/glyph";
+import { registry } from "../keybinds/registry.ts";
 import { icons } from "./icons.ts";
 import { formatFileSize } from "../utils/files.ts";
 
@@ -61,7 +62,7 @@ function AttachmentModeKeybinds() {
     exit: () => toggleMode(),
   }), [moveAttachment, removeAttachment, previewAttachment, toggleMode]);
 
-  return <ScopedKeybinds scope="composeAttachments" handlers={handlers} priority />;
+  return <ScopedKeybinds registry={registry} scope="composeAttachments" handlers={handlers} priority />;
 }
 
 // Attachment list component
@@ -75,8 +76,8 @@ function ComposeAttachments({ maxWidth }: { maxWidth: number }) {
   if (attachments.length === 0) {
     return (
       <Box style={{ flexDirection: "row", paddingX: 1, gap: 1 }}>
-        <Text dim>{icons.attachment}</Text>
-        <Text dim>No attachments (Ctrl+A to add)</Text>
+        <Text style={{ dim: true }}>{icons.attachment}</Text>
+        <Text style={{ dim: true }}>No attachments (Ctrl+A to add)</Text>
       </Box>
     );
   }
@@ -94,9 +95,9 @@ function ComposeAttachments({ maxWidth }: { maxWidth: number }) {
           <Text>{attachments.length} attachment{attachments.length > 1 ? "s" : ""}:</Text>
         </Box>
         {isInAttachmentMode ? (
-          <Text dim>j/k:nav d:remove o:preview ^G/Esc:done</Text>
+          <Text style={{ dim: true }}>j/k:nav d:remove o:preview ^G/Esc:done</Text>
         ) : (
-          <Text dim>[^G:manage] [^A:add]</Text>
+          <Text style={{ dim: true }}>[^G:manage] [^A:add]</Text>
         )}
       </Box>
 
@@ -142,10 +143,10 @@ function ContactSuggestions({ maxWidth }: { maxWidth: number }) {
       width: Math.min(maxWidth - 10, 55),
     }}>
       <Box style={{ flexDirection: "row", justifyContent: "space-between" }}>
-        <Text dim style={{ bold: true }}>
+        <Text style={{ dim: true, bold: true }}>
           {icons.people} Suggestions ({activeField.toUpperCase()})
         </Text>
-        <Text dim>Tab:accept ↑↓:nav Esc:dismiss</Text>
+        <Text style={{ dim: true }}>Tab:accept ↑↓:nav Esc:dismiss</Text>
       </Box>
       {suggestions.map((contact, index) => {
         const isSelected = index === selectedIndex;
@@ -210,7 +211,7 @@ function ComposeKeybinds({
   }), [sendReply, closeReply, toggleFullscreen, toggleCcBcc, openPicker, toggleAttachmentMode,
     isInAttachmentMode, isPickerOpen]);
 
-  return <ScopedKeybinds scope={scope} handlers={handlers} priority />;
+  return <ScopedKeybinds registry={registry} scope={scope} handlers={handlers} priority />;
 }
 
 export function ReplyView() {
@@ -332,10 +333,10 @@ export function ReplyView() {
             {icons.reply} {modeLabel}
           </Text>
           <Box style={{ flexDirection: "row", gap: 1 }}>
-            <Text dim>
+            <Text style={{ dim: true }}>
               {isFullscreen ? icons.compress : icons.expand}
             </Text>
-            <Text dim>{icons.close}</Text>
+            <Text style={{ dim: true }}>{icons.close}</Text>
           </Box>
         </Box>
 
@@ -344,7 +345,7 @@ export function ReplyView() {
           {/* From account selector */}
           {fromAccount && (
             <Box style={{ flexDirection: "row", alignItems: "center" }}>
-              <Text dim style={{ width: 10 }}>From: </Text>
+              <Text style={{ dim: true, width: 10 }}>From: </Text>
               {hasMultipleAccounts ? (
                 <Select
                   items={accountItems}
@@ -366,7 +367,7 @@ export function ReplyView() {
 
           {/* To field with Cc/Bcc toggle */}
           <Box style={{ flexDirection: "row", alignItems: "center" }}>
-            <Text dim style={{ width: 10 }}>To: </Text>
+            <Text style={{ dim: true, width: 10 }}>To: </Text>
             <Box style={{ flexDirection: "row", flexGrow: 1 }}>
               <Input
                 value={replyTo}
@@ -376,7 +377,7 @@ export function ReplyView() {
                 focusedStyle={{ bg: "blackBright" }}
               />
               {!showCcBcc && (
-                <Text dim style={{ marginLeft: 1 }}>
+                <Text style={{ dim: true, marginLeft: 1 }}>
                   Cc Bcc
                 </Text>
               )}
@@ -386,7 +387,7 @@ export function ReplyView() {
           {/* Cc field (collapsible) */}
           {showCcBcc && (
             <Box style={{ flexDirection: "row", alignItems: "center" }}>
-              <Text dim style={{ width: 10 }}>Cc: </Text>
+              <Text style={{ dim: true, width: 10 }}>Cc: </Text>
               <Input
                 value={replyCc}
                 onChange={updateCc}
@@ -400,7 +401,7 @@ export function ReplyView() {
           {/* Bcc field (collapsible) */}
           {showCcBcc && (
             <Box style={{ flexDirection: "row", alignItems: "center" }}>
-              <Text dim style={{ width: 10 }}>Bcc: </Text>
+              <Text style={{ dim: true, width: 10 }}>Bcc: </Text>
               <Input
                 value={replyBcc}
                 onChange={updateBcc}
@@ -416,7 +417,7 @@ export function ReplyView() {
 
           {/* Subject field */}
           <Box style={{ flexDirection: "row", alignItems: "center" }}>
-            <Text dim style={{ width: 10 }}>Subject: </Text>
+            <Text style={{ dim: true, width: 10 }}>Subject: </Text>
             <Input
               value={replySubject}
               onChange={updateSubject}
@@ -467,10 +468,10 @@ export function ReplyView() {
           borderStyle: "single",
           borderColor: "gray",
         }}>
-          <Text dim>
+          <Text style={{ dim: true }}>
             ^A:attach | ^G:manage | ^B:Cc/Bcc | ^F:{isFullscreen ? "compact" : "full"}
           </Text>
-          <Text dim>
+          <Text style={{ dim: true }}>
             Ctrl+S: send | Esc: cancel
           </Text>
         </Box>
