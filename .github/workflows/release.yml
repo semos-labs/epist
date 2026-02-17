@@ -59,16 +59,8 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID || '' }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET || '' }}
 
-      - name: Cache LLVM (Linux)
-        if: matrix.strip && runner.os == 'Linux'
-        id: cache-llvm-linux
-        uses: actions/cache@v4
-        with:
-          path: /usr/lib/llvm-*
-          key: llvm-linux-${{ runner.arch }}
-
       - name: Install llvm-strip (Linux)
-        if: matrix.strip && runner.os == 'Linux' && steps.cache-llvm-linux.outputs.cache-hit != 'true'
+        if: matrix.strip && runner.os == 'Linux'
         run: sudo apt-get install -y llvm
 
       - name: Strip binary (Linux)
