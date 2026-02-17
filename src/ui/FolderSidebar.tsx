@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useRef } from "react";
-import { Box, Text, Button, FocusScope, Select } from "@semos-labs/glyph";
+import { Box, Text, Button, FocusScope, Select, ScrollView, useApp } from "@semos-labs/glyph";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
   folderSidebarOpenAtom,
@@ -181,9 +181,16 @@ export function FolderSidebar() {
     setFocus("list");
   }, [changeLabel, setOpen, setFocus]);
 
+  const { rows: terminalHeight } = useApp();
+
   if (!open) return null;
 
   const hasMultipleAccounts = accounts.length > 1;
+
+  // Compute explicit scroll height:
+  // total height minus header(2) + status bar(2) + "Folders" title(2) + hint line(1) + account selector(2 if present)
+  const chromeHeight = 2 + 2 + 1 + (hasMultipleAccounts ? 2 : 0);
+  const scrollHeight = Math.max(3, terminalHeight - chromeHeight);
 
   return (
     <FocusScope trap>
@@ -194,7 +201,7 @@ export function FolderSidebar() {
           <Text style={{ bold: true }}>Folders</Text>
         </Box>
 
-        <Box style={{ flexDirection: "column", flexGrow: 1 }}>
+        <ScrollView style={{ height: scrollHeight }} focusable={false} showScrollbar={false}>
           {allItems.map((item, index) => {
             // Separator before categories toggle
             if (item.type === "categoriesToggle") {
@@ -245,7 +252,7 @@ export function FolderSidebar() {
               </React.Fragment>
             );
           })}
-        </Box>
+        </ScrollView>
 
         {/* Account selector */}
         {hasMultipleAccounts && (

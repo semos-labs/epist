@@ -211,7 +211,7 @@ function ListKeybinds() {
   return <ScopedKeybinds registry={registry} scope="list" handlers={handlers} />;
 }
 
-export function EmailList() {
+export function EmailList({ fullWidth }: { fullWidth?: boolean } = {}) {
   const { rows: terminalHeight, columns: terminalWidth } = useApp();
   const threads = useAtomValue(filteredThreadsAtom);
   const selectedThreadId = useAtomValue(selectedThreadIdAtom);
@@ -232,7 +232,9 @@ export function EmailList() {
   
   const isFocused = focus === "list";
   
-  const listWidth = Math.min(60, Math.max(30, Math.floor(terminalWidth * 0.4)));
+  const listWidth = fullWidth
+    ? undefined  // let flexbox fill available space
+    : Math.min(60, Math.max(30, Math.floor(terminalWidth * 0.4)));
   const availableLines = terminalHeight - 4;
   const visibleCount = Math.floor((availableLines + 1) / 3);
 
@@ -255,7 +257,7 @@ export function EmailList() {
   return (
     <Box
       style={{
-        width: listWidth,
+        ...(listWidth != null ? { width: listWidth } : { flexGrow: 1 }),
         height: "100%",
         flexDirection: "column",
         clip: true,
@@ -284,7 +286,7 @@ export function EmailList() {
               <React.Fragment key={thread.id}>
                 {showSeparator && (
                   <Box style={{ flexDirection: "row", alignItems: "center", paddingY: 0 }}>
-                    <Text style={{ dim: true }}>{"─".repeat(listWidth - 4)}</Text>
+                    <Text style={{ dim: true }}>{"─".repeat((listWidth ?? terminalWidth) - 4)}</Text>
                   </Box>
                 )}
                 <ThreadItem

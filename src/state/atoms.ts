@@ -290,6 +290,10 @@ export const activeLinkIndexAtom = atom<number>(-1); // -1 = not navigating link
 export const selectedThreadIdsAtom = atom<Set<string>>(new Set<string>());
 export const bulkModeAtom = atom<boolean>(false);
 
+// Layout mode — driven by terminal width via useMediaQuery in App.tsx
+export type LayoutMode = "wide" | "narrow" | "compact";
+export const layoutModeAtom = atom<LayoutMode>("wide");
+
 // Folder sidebar state
 export const folderSidebarOpenAtom = atom<boolean>(false);
 export const selectedFolderIndexAtom = atom<number>(0);

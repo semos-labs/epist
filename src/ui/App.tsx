@@ -1,5 +1,5 @@
 import React, { useMemo } from "react";
-import { Box, Text, useApp, JumpNav, ScopedKeybinds } from "@semos-labs/glyph";
+import { Box, Text, useApp, useMediaQuery, Portal, JumpNav, ScopedKeybinds } from "@semos-labs/glyph";
 import { Provider, useAtomValue, useSetAtom } from "jotai";
 import { EmailList } from "./EmailList.tsx";
 import { EmailView } from "./EmailView.tsx";
@@ -12,13 +12,29 @@ import { MoveToFolderPicker } from "./MoveToFolderPicker.tsx";
 import { AccountsDialog } from "./AccountsDialog.tsx";
 import { ImapSetupDialog } from "./ImapSetupDialog.tsx";
 import { WelcomeScreen } from "./WelcomeScreen.tsx";
-import { overlayStackAtom, currentLabelAtom, focusAtom, hasOverlayAtom, isReplyingAtom, folderSidebarOpenAtom, isLoggedInAtom } from "../state/atoms.ts";
+import { overlayStackAtom, currentLabelAtom, focusAtom, hasOverlayAtom, isReplyingAtom, folderSidebarOpenAtom, isLoggedInAtom, layoutModeAtom, type LayoutMode } from "../state/atoms.ts";
 import { toggleFolderSidebarAtom, loadConfigAtom, checkAuthAtom } from "../state/actions.ts";
 import { registry } from "../keybinds/registry.ts";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 
 // ASCII art logo for the app
 const LOGO = "EPIST";
+
+// ── Layout mode hook — syncs useMediaQuery results to the layoutModeAtom ──
+
+function useLayoutMode(): LayoutMode {
+  const isWide = useMediaQuery({ minColumns: 130 });
+  const isNotCompact = useMediaQuery({ minColumns: 80 });
+  const setLayoutMode = useSetAtom(layoutModeAtom);
+
+  const mode: LayoutMode = isWide ? "wide" : isNotCompact ? "narrow" : "compact";
+
+  React.useEffect(() => {
+    setLayoutMode(mode);
+  }, [mode, setLayoutMode]);
+
+  return mode;
+}
 
 // Vertical divider component
 function VerticalDivider() {
@@ -59,7 +75,7 @@ function OverlayRenderer() {
   );
 }
 
-function Header() {
+function Header({ layoutMode }: { layoutMode: LayoutMode }) {
   const { columns: terminalWidth } = useApp();
   const label = useAtomValue(currentLabelAtom);
   const focus = useAtomValue(focusAtom);
@@ -68,6 +84,33 @@ function Header() {
   const labelDisplay = label.charAt(0) + label.slice(1).toLowerCase();
   const focusIndicator = focus === "list" ? "◀" : focus === "view" ? "▶" : "○";
 
+  // ── Narrow / compact: single-pane header ──
+  if (layoutMode !== "wide") {
+    const paneLabel = focus === "view" ? "Email" : labelDisplay;
+    return (
+      <Box
+        style={{
+          flexDirection: "row",
+          borderBottomWidth: 1,
+          borderStyle: "single",
+          borderColor: "gray",
+          justifyContent: "space-between",
+          paddingX: 1,
+        }}
+      >
+        <Box style={{ flexDirection: "row", gap: 1 }}>
+          <Text style={{ bold: true, color: "cyan" }}>{LOGO}</Text>
+          <Text style={{ bold: true }}>{paneLabel}</Text>
+          <Text style={{ dim: true }}>{focusIndicator}</Text>
+        </Box>
+        <Text style={{ dim: true }}>
+          {focus === "view" ? "Esc:back" : "j/k:nav ↵:open"} ?:help ::cmd
+        </Text>
+      </Box>
+    );
+  }
+
+  // ── Wide: two-column header ──
   // Match the list width calculation from EmailList
   const listWidth = Math.min(60, Math.max(30, Math.floor(terminalWidth * 0.4)));
   // Account for folder sidebar (22 chars) + its divider (1 char)
@@ -121,11 +164,99 @@ function GlobalKeybinds() {
   return <ScopedKeybinds registry={registry} scope="global" handlers={handlers} />;
 }
 
-function AppContent() {
+// ── Inline folder sidebar (part of the row layout — wide & narrow modes) ──
+
+function InlineFolderSidebar() {
   const folderSidebarOpen = useAtomValue(folderSidebarOpenAtom);
+  if (!folderSidebarOpen) return null;
+  return (
+    <>
+      <FolderSidebar />
+      <VerticalDivider />
+    </>
+  );
+}
+
+// ── Floating folder sidebar (Portal overlay — compact mode) ──
+
+function FloatingFolderSidebar() {
+  const folderSidebarOpen = useAtomValue(folderSidebarOpenAtom);
+  if (!folderSidebarOpen) return null;
+  return (
+    <Portal>
+      <Box
+        style={{
+          width: "100%",
+          height: "100%",
+          flexDirection: "row",
+        }}
+      >
+        <Box style={{ flexDirection: "column", bg: "black" }}>
+          <FolderSidebar />
+        </Box>
+        {/* Dim overlay on the right side */}
+        <Box style={{ flexGrow: 1 }} />
+      </Box>
+    </Portal>
+  );
+}
+
+// ── Wide layout: two-column (list + divider + view) ──
+
+function WideLayout() {
+  const folderSidebarOpen = useAtomValue(folderSidebarOpenAtom);
+  return (
+    <Box
+      style={{
+        flexGrow: 1,
+        flexShrink: 1,
+        flexDirection: "row",
+        clip: true,
+      }}
+    >
+      {folderSidebarOpen && (
+        <>
+          <FolderSidebar />
+          <VerticalDivider />
+        </>
+      )}
+      <EmailList />
+      <VerticalDivider />
+      <EmailView />
+    </Box>
+  );
+}
+
+// ── Narrow / compact layout: single pane based on focus ──
+
+function SinglePaneLayout({ layoutMode }: { layoutMode: LayoutMode }) {
+  const focus = useAtomValue(focusAtom);
+  const showView = focus === "view";
+
+  return (
+    <Box
+      style={{
+        flexGrow: 1,
+        flexShrink: 1,
+        flexDirection: "row",
+        clip: true,
+      }}
+    >
+      {/* Folder sidebar — inline for narrow, floating for compact */}
+      {layoutMode === "narrow" && <InlineFolderSidebar />}
+      {layoutMode === "compact" && <FloatingFolderSidebar />}
+
+      {/* Show either the list or the view */}
+      {showView ? <EmailView /> : <EmailList fullWidth />}
+    </Box>
+  );
+}
+
+function AppContent() {
   const isLoggedIn = useAtomValue(isLoggedInAtom);
   const loadConfig = useSetAtom(loadConfigAtom);
   const checkAuth = useSetAtom(checkAuthAtom);
+  const layoutMode = useLayoutMode();
 
   // Load config first, then check auth (checkAuth reads configAtom for IMAP accounts)
   React.useEffect(() => {
@@ -144,34 +275,14 @@ function AppContent() {
         {isLoggedIn ? (
           <>
             {/* Header */}
-            <Header />
+            <Header layoutMode={layoutMode} />
 
-            {/* Main content: two-column layout */}
-            <Box
-              style={{
-                flexGrow: 1,
-                flexShrink: 1,
-                flexDirection: "row",
-                clip: true,
-              }}
-            >
-              {/* Folder sidebar (hidden by default, Ctrl+F to toggle) */}
-              {folderSidebarOpen && (
-                <>
-                  <FolderSidebar />
-                  <VerticalDivider />
-                </>
-              )}
-
-              {/* Left: Email list sidebar */}
-              <EmailList />
-
-              {/* Vertical divider */}
-              <VerticalDivider />
-
-              {/* Right: Email view panel */}
-              <EmailView />
-            </Box>
+            {/* Main content: responsive layout */}
+            {layoutMode === "wide" ? (
+              <WideLayout />
+            ) : (
+              <SinglePaneLayout layoutMode={layoutMode} />
+            )}
 
             {/* Global keybinds */}
             <GlobalKeybinds />
