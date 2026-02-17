@@ -80,26 +80,26 @@ jobs:
         id: cache-llvm-macos
         uses: actions/cache/restore@v4
         with:
-          path: /usr/local/opt/llvm-strip
+          path: ~/.llvm-strip
           key: llvm-strip-macos-${{ runner.arch }}
 
       - name: Install & cache llvm-strip (macOS)
         if: matrix.strip && runner.os == 'macOS' && steps.cache-llvm-macos.outputs.cache-hit != 'true'
         run: |
           brew install llvm
-          mkdir -p /usr/local/opt/llvm-strip
-          cp $(brew --prefix llvm)/bin/llvm-strip /usr/local/opt/llvm-strip/
+          mkdir -p ~/.llvm-strip
+          cp $(brew --prefix llvm)/bin/llvm-strip ~/.llvm-strip/
 
       - name: Save LLVM cache (macOS)
         if: matrix.strip && runner.os == 'macOS' && steps.cache-llvm-macos.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: /usr/local/opt/llvm-strip
+          path: ~/.llvm-strip
           key: llvm-strip-macos-${{ runner.arch }}
 
       - name: Strip binary (macOS)
         if: matrix.strip && runner.os == 'macOS'
-        run: /usr/local/opt/llvm-strip/llvm-strip ${{ matrix.artifact }}
+        run: ~/.llvm-strip/llvm-strip ${{ matrix.artifact }}
 
       - name: Make executable
         run: chmod +x ${{ matrix.artifact }}
