@@ -55,23 +55,41 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID || '' }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET || '' }}
 
-      - name: Install llvm-strip (Linux)
+      - name: Cache LLVM (Linux)
         if: runner.os == 'Linux'
+        id: cache-llvm-linux
+        uses: actions/cache@v4
+        with:
+          path: /usr/lib/llvm-*
+          key: llvm-linux-${{ runner.arch }}
+
+      - name: Install llvm-strip (Linux)
+        if: runner.os == 'Linux' && steps.cache-llvm-linux.outputs.cache-hit != 'true'
         run: sudo apt-get install -y llvm
 
       - name: Strip binary (Linux)
         if: runner.os == 'Linux'
         run: llvm-strip ${{ matrix.artifact }}
 
-      - name: Install llvm-strip (macOS)
+      - name: Cache LLVM (macOS)
         if: runner.os == 'macOS'
-        run: brew install llvm
+        id: cache-llvm-macos
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/llvm
+          key: llvm-macos-${{ runner.arch }}
+
+      - name: Install llvm-strip (macOS)
+        if: runner.os == 'macOS' && steps.cache-llvm-macos.outputs.cache-hit != 'true'
+        run: |
+          brew install llvm
+          cp -R $(brew --prefix llvm) ${{ runner.temp }}/llvm
 
       - name: Strip binary (macOS)
         if: runner.os == 'macOS'
         run: |
           codesign --remove-signature ${{ matrix.artifact }}
-          $(brew --prefix llvm)/bin/llvm-strip ${{ matrix.artifact }}
+          ${{ runner.temp }}/llvm/bin/llvm-strip ${{ matrix.artifact }}
           codesign -s - ${{ matrix.artifact }}
 
       - name: Make executable
