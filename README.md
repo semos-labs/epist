@@ -25,6 +25,7 @@
   <a href="https://github.com/nick-skriabin/epist/releases/latest"><img src="https://img.shields.io/github/downloads/nick-skriabin/epist/total?label=Downloads&color=blue" alt="Downloads"></a>
   <img src="https://img.shields.io/badge/Bun-1.0+-f9f1e1?logo=bun&logoColor=black" alt="Bun">
   <img src="https://img.shields.io/badge/License-MIT-blue" alt="MIT License">
+  <a href="https://github.com/semos-labs/glyph"><img src="https://img.shields.io/badge/Built_with-Glyph-bd93f9" alt="Built with Glyph"></a>
 </p>
 
 ---
