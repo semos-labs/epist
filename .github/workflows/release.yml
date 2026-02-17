@@ -47,13 +47,20 @@ jobs:
 
       - name: Build binary
         run: |
-          bun build --compile --minify --target=${{ matrix.target }} src/index.tsx --outfile ${{ matrix.artifact }} \
+          bun build --compile --minify --sourcemap=none --target=${{ matrix.target }} src/index.tsx --outfile ${{ matrix.artifact }} \
             --define __epist_GOOGLE_CLIENT_ID__="'${{ secrets.GOOGLE_CLIENT_ID }}'" \
             --define __epist_GOOGLE_CLIENT_SECRET__="'${{ secrets.GOOGLE_CLIENT_SECRET }}'"
         env:
           # Fallback in case secrets aren't set
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID || '' }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET || '' }}
+
+      - name: Install llvm-strip (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y llvm
+
+      - name: Strip binary
+        run: llvm-strip ${{ matrix.artifact }}
 
       - name: Make executable
         run: chmod +x ${{ matrix.artifact }}
