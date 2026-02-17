@@ -63,9 +63,16 @@ jobs:
         if: runner.os == 'Linux'
         run: llvm-strip ${{ matrix.artifact }}
 
+      - name: Install llvm-strip (macOS)
+        if: runner.os == 'macOS'
+        run: brew install llvm
+
       - name: Strip binary (macOS)
         if: runner.os == 'macOS'
-        run: strip ${{ matrix.artifact }}
+        run: |
+          codesign --remove-signature ${{ matrix.artifact }}
+          $(brew --prefix llvm)/bin/llvm-strip ${{ matrix.artifact }}
+          codesign -s - ${{ matrix.artifact }}
 
       - name: Make executable
         run: chmod +x ${{ matrix.artifact }}
