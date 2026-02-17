@@ -21,15 +21,19 @@ jobs:
           - os: ubuntu-latest
             target: bun-linux-x64
             artifact: epist-linux-x64
+            strip: true
           - os: ubuntu-latest
             target: bun-linux-arm64
             artifact: epist-linux-arm64
+            strip: true
           - os: macos-latest
             target: bun-darwin-x64
             artifact: epist-darwin-x64
+            strip: false  # cross-compiled, code signature can't be removed
           - os: macos-latest
             target: bun-darwin-arm64
             artifact: epist-darwin-arm64
+            strip: true
 
     runs-on: ${{ matrix.os }}
 
@@ -56,7 +60,7 @@ jobs:
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET || '' }}
 
       - name: Cache LLVM (Linux)
-        if: runner.os == 'Linux'
+        if: matrix.strip && runner.os == 'Linux'
         id: cache-llvm-linux
         uses: actions/cache@v4
         with:
@@ -64,15 +68,15 @@ jobs:
           key: llvm-linux-${{ runner.arch }}
 
       - name: Install llvm-strip (Linux)
-        if: runner.os == 'Linux' && steps.cache-llvm-linux.outputs.cache-hit != 'true'
+        if: matrix.strip && runner.os == 'Linux' && steps.cache-llvm-linux.outputs.cache-hit != 'true'
         run: sudo apt-get install -y llvm
 
       - name: Strip binary (Linux)
-        if: runner.os == 'Linux'
+        if: matrix.strip && runner.os == 'Linux'
         run: llvm-strip ${{ matrix.artifact }}
 
       - name: Cache LLVM (macOS)
-        if: runner.os == 'macOS'
+        if: matrix.strip && runner.os == 'macOS'
         id: cache-llvm-macos
         uses: actions/cache@v4
         with:
@@ -80,13 +84,13 @@ jobs:
           key: llvm-macos-${{ runner.arch }}
 
       - name: Install llvm-strip (macOS)
-        if: runner.os == 'macOS' && steps.cache-llvm-macos.outputs.cache-hit != 'true'
+        if: matrix.strip && runner.os == 'macOS' && steps.cache-llvm-macos.outputs.cache-hit != 'true'
         run: |
           brew install llvm
           cp -R $(brew --prefix llvm) ${{ runner.temp }}/llvm
 
       - name: Strip binary (macOS)
-        if: runner.os == 'macOS'
+        if: matrix.strip && runner.os == 'macOS'
         run: |
           codesign --remove-signature ${{ matrix.artifact }}
           ${{ runner.temp }}/llvm/bin/llvm-strip ${{ matrix.artifact }}
