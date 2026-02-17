@@ -21,8 +21,6 @@
 </p>
 
 <p align="center">
-
-
   <a href="https://github.com/semos-labs/epist/releases/latest"><img src="https://img.shields.io/github/v/release/semos-labs/epist?label=Release&color=green" alt="Latest Release"></a>
   <a href="https://github.com/semos-labs/epist/releases/latest"><img src="https://img.shields.io/github/downloads/semos-labs/epist/total?label=Downloads&color=blue" alt="Downloads"></a>
   <img src="https://img.shields.io/badge/Bun-1.0+-f9f1e1?logo=bun&logoColor=black" alt="Bun">
@@ -130,7 +128,7 @@ brew install epist
 ### Option 2: Build from Source
 
 ```bash
-git clone https://github.com/nick-skriabin/epist.git
+git clone https://github.com/semos-labs/epist.git
 cd epist
 bun install
 
