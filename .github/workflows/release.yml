@@ -91,10 +91,7 @@ jobs:
 
       - name: Strip binary (macOS)
         if: matrix.strip && runner.os == 'macOS'
-        run: |
-          codesign --remove-signature ${{ matrix.artifact }}
-          ${{ runner.temp }}/llvm/bin/llvm-strip ${{ matrix.artifact }}
-          codesign -s - ${{ matrix.artifact }}
+        run: ${{ runner.temp }}/llvm/bin/llvm-strip ${{ matrix.artifact }}
 
       - name: Make executable
         run: chmod +x ${{ matrix.artifact }}
