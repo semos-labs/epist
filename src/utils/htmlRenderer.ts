@@ -36,11 +36,12 @@ export interface ExtractedLink {
 
 // ===== Placeholder formats =====
 //
-// Images:  ⬚⟪index⟫⟪alt⟫   — index into imageRegistry
-// Links:   🔗⟪index⟫⟪label⟫ — index into linkRegistry
+// Images:  ⬚⟪index⟫⟪alt⟫  — index into imageRegistry (alt in placeholder for table sizing)
+// Links:   🔗⟪index⟫       — index into linkRegistry (label lives only in registry)
 //
-// Both use compact index-based placeholders so they survive
-// the Turndown → marked-terminal pipeline without mangling.
+// Link placeholders intentionally omit the label text so that
+// marked-terminal's reflowText cannot word-wrap in the middle
+// of a placeholder, which would break regex parsing downstream.
 
 interface ImageRegistryEntry {
   src: string;
@@ -52,8 +53,9 @@ interface LinkRegistryEntry {
   label: string;
 }
 
-/** Combined regex for image (⬚) and link (🔗) placeholders */
-const PLACEHOLDER_RE = /(?:(⬚)|(🔗))⟪(\d+)⟫⟪([^⟫]*)⟫/g;
+/** Combined regex for image (⬚) and link (🔗) placeholders.
+ *  The second bracket pair ⟪text⟫ is optional — present for images (alt), absent for links. */
+const PLACEHOLDER_RE = /(?:(⬚)|(🔗))⟪(\d+)⟫(?:⟪([^⟫]*)⟫)?/g;
 
 // ===== DOM-based HTML Preprocessing =====
 
@@ -280,8 +282,9 @@ function createTurndownService(linkRegistry: LinkRegistryEntry[]): TurndownServi
     hr: "---",
   });
 
-  // === Links: emit compact placeholders 🔗⟪index⟫⟪label⟫ ===
-  // The URL is stored in the linkRegistry; only the label is visible.
+  // === Links: emit compact placeholders 🔗⟪index⟫ ===
+  // The URL and label are stored in the linkRegistry; the placeholder is kept
+  // as short as possible so marked-terminal's reflowText cannot split it.
   td.addRule("cleanLinks", {
     filter: "a",
     replacement: (content, node) => {
@@ -299,7 +302,7 @@ function createTurndownService(linkRegistry: LinkRegistryEntry[]): TurndownServi
           try { linkLabel = new URL(href).hostname; } catch { linkLabel = "link"; }
           const idx = linkRegistry.length;
           linkRegistry.push({ href, label: linkLabel });
-          return `${text}\n🔗⟪${idx}⟫⟪${linkLabel}⟫`;
+          return `${text}\n🔗⟪${idx}⟫`;
         }
         return text;
       }
@@ -327,7 +330,7 @@ function createTurndownService(linkRegistry: LinkRegistryEntry[]): TurndownServi
       // Store in registry and emit placeholder
       const idx = linkRegistry.length;
       linkRegistry.push({ href, label });
-      return `🔗⟪${idx}⟫⟪${label}⟫`;
+      return `🔗⟪${idx}⟫`;
     },
   });
 
@@ -495,8 +498,8 @@ export const TABLE_CHARS_RE = /[│┌┐└┘├┤┬┴┼─]/;
  * Parse a rendered line into segments of text, inline images, and links.
  *
  * Placeholders are split out as separate parts:
- *   - Image: ⬚⟪index⟫⟪alt⟫  → { type: "image", src, alt }
- *   - Link:  🔗⟪index⟫⟪label⟫ → { type: "link", href, content: label }
+ *   - Image: ⬚⟪index⟫⟪alt⟫ → { type: "image", src, alt }
+ *   - Link:  🔗⟪index⟫      → { type: "link", href, content: label } (label from registry)
  *
  * For table lines (containing box-drawing characters), images get a `tableWidth`
  * property so the renderer can pad them to preserve column alignment.
@@ -548,8 +551,12 @@ export function parseLineSegments(
     } else {
       // Link placeholder
       const entry = linkRegistry[idx];
-      const label = text || entry?.label || "";
+      let label = text || entry?.label || "";
       const href = entry?.href || "";
+      // Fallback: if label is empty/whitespace-only, derive from the URL
+      if (!label.trim() && href) {
+        try { label = new URL(href).hostname; } catch { label = href; }
+      }
       parts.push({
         type: "link",
         content: label,
@@ -587,7 +594,7 @@ export interface RenderResult {
  *
  * Pipeline:
  *   1. DOM preprocessing (cheerio) — sanitize, remove tracking pixels, unwrap layout tables
- *   2. Turndown — HTML → Markdown (images become ![alt](src), links become 🔗⟪index⟫⟪label⟫)
+ *   2. Turndown — HTML → Markdown (images become ![alt](src), links become 🔗⟪index⟫)
  *   3. marked-terminal — Markdown → ANSI terminal text (images become ⬚⟪index⟫⟪alt⟫)
  *   4. Post-processing — collapse blank lines, parse inline segments, build link list
  */
@@ -596,7 +603,7 @@ export function renderHtmlEmail(html: string, width: number = 80): RenderResult 
   const { html: cleanedHtml } = preprocessEmailDom(html);
 
   // Step 2: Convert HTML to Markdown via Turndown
-  // Link registry collects href+label; placeholders use compact 🔗⟪index⟫⟪label⟫ format
+  // Link registry collects href+label; placeholders use compact 🔗⟪index⟫ format
   const linkRegistry: LinkRegistryEntry[] = [];
   const td = createTurndownService(linkRegistry);
   const markdown = td.turndown(cleanedHtml);

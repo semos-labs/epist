@@ -52,12 +52,15 @@ test("renderHtmlEmail produces clean output with inline image placeholders", () 
     acc + parts.filter(p => p.type === "image").length, 0);
   console.log(`Inline images: ${imageCount}`);
 
-  // Content checks
+  // Content checks (plain text body — link labels are in registry, not raw text)
   expect(fullText).toContain("Five Flops, Then $23K MRR");
   expect(fullText).toContain("Vibe coding tools to try");
   expect(fullText).toContain("Bite-sized growth tip");
-  expect(fullText).toContain("Augment Code");
   expect(fullText).toContain("Rob Hallam failed with five products");
+
+  // Link labels should be accessible via the links list
+  const linkLabels = result.links.map(l => l.label);
+  expect(linkLabels.some(l => l.includes("Augment Code"))).toBe(true);
 
   // Should NOT have raw escaped markdown asterisks
   expect(fullText).not.toMatch(/\\\*\\\*This founder hit\\\*\\\*/);
@@ -259,8 +262,11 @@ test("example2: renderHtmlEmail — GitHub Actions email", () => {
   // Should contain the key content
   expect(fullText).toContain("[semos-labs/glyph] Test workflow run");
   expect(fullText).toContain("All jobs were successful");
-  expect(fullText).toContain("View workflow run");
   expect(fullText).toMatch(/Succeeded in 14\s+seconds/);
+
+  // Link labels live in the registry (parsedLines / links), not in the raw text
+  const allLinkLabels = result.links.map(l => l.label);
+  expect(allLinkLabels.some(l => l.includes("View workflow run"))).toBe(true);
 
   // Address should be readable
   expect(fullText).toContain("GitHub, Inc.");

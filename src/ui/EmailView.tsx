@@ -64,6 +64,11 @@ import { icons } from "./icons.ts";
 import { renderHtmlEmail, renderPlainTextEmail, TABLE_CHARS_RE, type LinePart } from "../utils/htmlRenderer.ts";
 import { DateTime } from "luxon";
 const InlineLink = React.memo(function InlineLink({ href, label, isActive, disabled }: { href: string; label?: string; isActive: boolean; disabled: boolean }) {
+  // Ensure we always show something — fall back to hostname or raw URL
+  let displayLabel = label;
+  if (!displayLabel?.trim()) {
+    try { displayLabel = new URL(href).hostname; } catch { displayLabel = href; }
+  }
   return (
     <Link
       href={href}
@@ -71,7 +76,7 @@ const InlineLink = React.memo(function InlineLink({ href, label, isActive, disab
       style={{ underline: true, ...(isActive && { bg: "cyan", color: "black" }) }}
       focusedStyle={!isActive ? { bg: "blackBright" } : undefined}
     >
-      <Text>{label}</Text>
+      <Text>{displayLabel}</Text>
     </Link>
   );
 });
