@@ -1,61 +1,74 @@
-import { marked, Marked } from "marked";
-import { markedTerminal } from "marked-terminal";
 import TurndownService from "turndown";
+import { tables as turndownTables } from "@truto/turndown-plugin-gfm";
 import * as cheerio from "cheerio";
+import { unified } from "unified";
+import remarkParse from "remark-parse";
+import remarkGfm from "remark-gfm";
+import type { Root, RootContent, PhrasingContent } from "mdast";
 
-// ===== Line Parts (for inline rendering) =====
+// ===== Exported types =====
 
-/**
- * A segment within a rendered line.
- * Lines can contain a mix of text, inline images, and links.
- */
-export interface LinePart {
-  type: "text" | "image" | "link";
-  /** For text: the rendered text (may include ANSI codes). For image: the alt text. For link: the label. */
-  content: string;
-  /** For image: the source URL */
-  src?: string;
-  /** For image: alt text */
-  alt?: string;
-  /** For image in table lines: the character width the placeholder occupied in the table layout */
-  tableWidth?: number;
-  /** For link: the destination URL */
-  href?: string;
-}
-
-// ===== Link Detection =====
+export type { Root, RootContent, PhrasingContent } from "mdast";
 
 export interface ExtractedLink {
   id: string;
   href: string;
   /** Human-readable label for the link */
   label: string;
-  /** Line index in the rendered output */
+  /** Sequential index in the flat link list */
   lineIndex: number;
 }
 
-// ===== Placeholder formats =====
-//
-// Images:  ⬚⟪index⟫⟪alt⟫  — index into imageRegistry (alt in placeholder for table sizing)
-// Links:   🔗⟪index⟫       — index into linkRegistry (label lives only in registry)
-//
-// Link placeholders intentionally omit the label text so that
-// marked-terminal's reflowText cannot word-wrap in the middle
-// of a placeholder, which would break regex parsing downstream.
-
-interface ImageRegistryEntry {
-  src: string;
-  alt: string;
+export interface EmailRenderResult {
+  /** Parsed markdown AST */
+  root: Root;
+  /** All links found in the content (for Tab-navigation) */
+  links: ExtractedLink[];
 }
 
-interface LinkRegistryEntry {
-  href: string;
-  label: string;
+// ===== Mdast helpers =====
+
+const remarkParser = unified().use(remarkParse).use(remarkGfm);
+
+function parseMarkdown(md: string): Root {
+  return remarkParser.parse(md);
 }
 
-/** Combined regex for image (⬚) and link (🔗) placeholders.
- *  The second bracket pair ⟪text⟫ is optional — present for images (alt), absent for links. */
-const PLACEHOLDER_RE = /(?:(⬚)|(🔗))⟪(\d+)⟫(?:⟪([^⟫]*)⟫)?/g;
+/** Extract plain text content from any mdast node */
+export function getTextContent(node: any): string {
+  if (node.type === "text" || node.type === "inlineCode") return node.value || "";
+  if (node.type === "break") return "\n";
+  if (node.children) return node.children.map(getTextContent).join("");
+  return "";
+}
+
+/** Walk the mdast tree and collect all links */
+export function extractLinks(root: Root): ExtractedLink[] {
+  const links: ExtractedLink[] = [];
+
+  function walk(node: any) {
+    if (node.type === "link") {
+      let label = getTextContent(node).replace(/\s+/g, " ").trim();
+      if (!label) {
+        try { label = new URL(node.url).hostname; } catch { label = node.url; }
+      }
+      links.push({
+        id: `link-${links.length}`,
+        href: node.url,
+        label,
+        lineIndex: links.length,
+      });
+    }
+    if (node.children) {
+      for (const child of node.children) {
+        walk(child);
+      }
+    }
+  }
+
+  walk(root);
+  return links;
+}
 
 // ===== DOM-based HTML Preprocessing =====
 
@@ -122,34 +135,33 @@ function isDataTableEl($: cheerio.CheerioAPI, el: cheerio.Cheerio<any>): boolean
 }
 
 /**
- * Unwrap a single layout table: replace <table>/<tr>/<td>/<th> with <div>s.
+ * Shallow-unwrap a single layout table: replace only THIS table's own
+ * structural elements (<tr>, <td>, <th>) with <div>s — nested child
+ * tables (data tables) are left untouched.
  */
 function unwrapLayoutTable($: cheerio.CheerioAPI, table: cheerio.Cheerio<any>) {
-  // Remove structural wrapper elements
-  table.find("tbody, thead, tfoot, colgroup, col").each((_, el) => {
-    const $el = $(el);
-    if (["tbody", "thead", "tfoot"].includes((el as any).tagName)) {
-      $el.replaceWith($el.contents());
-    } else {
-      $el.remove();
-    }
+  // 1. Unwrap direct structural wrappers (tbody/thead/tfoot/colgroup/col)
+  table.children("tbody, thead, tfoot").each((_, el) => {
+    $(el).replaceWith($(el).contents());
+  });
+  table.children("colgroup, col").remove();
+
+  // 2. Replace this table's own <tr> and their direct <td>/<th> with <div>
+  //    (children() only selects direct children, preserving nested tables)
+  table.children("tr").each((_, el) => {
+    const $row = $(el);
+    $row.children("td, th").each((_, cell) => {
+      const $cell = $(cell);
+      const div = $("<div></div>");
+      div.append($cell.contents());
+      $cell.replaceWith(div);
+    });
+    const div = $("<div></div>");
+    div.append($row.contents());
+    $row.replaceWith(div);
   });
 
-  // Replace <tr>, <td>, <th> with <div>
-  table.find("tr").each((_, el) => {
-    const $el = $(el);
-    const div = $("<div></div>");
-    div.append($el.contents());
-    $el.replaceWith(div);
-  });
-  table.find("td, th").each((_, el) => {
-    const $el = $(el);
-    const div = $("<div></div>");
-    div.append($el.contents());
-    $el.replaceWith(div);
-  });
-
-  // Replace the <table> itself with its contents
+  // 3. Replace the <table> itself with its contents
   table.replaceWith(table.contents());
 }
 
@@ -202,19 +214,17 @@ export function preprocessEmailDom(html: string): { html: string } {
   });
 
   // ── 4. <img> tags are left intact for Turndown ─────────────────
-  // Turndown will convert them to ![alt](src) markdown images.
-  // marked-terminal's image handler will output our parseable placeholder.
 
-  // ── 5. Unwrap layout tables (inside-out) ───────────────────────
+  // ── 5. Unwrap layout tables ─────────────────────────────────────
+  // Shallow-unwrap: each pass only touches the table's own rows/cells,
+  // so nested data tables survive.  Iterate until stable.
   const MAX_ITERATIONS = 50;
   for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
     let changed = false;
 
     $("table").each((_, el) => {
       const $table = $(el);
-      if ($table.find("table").length > 0) return;
-
-      if (isDataTableEl($, $table)) return;
+      if (isDataTableEl($, $table)) return; // keep genuine data tables
 
       unwrapLayoutTable($, $table);
       changed = true;
@@ -223,8 +233,32 @@ export function preprocessEmailDom(html: string): { html: string } {
     if (!changed) break;
   }
 
-  // ── 6. Strip junk attributes (keep src, alt, title, href) ─────
-  const STRIP_ATTRS = ["style", "id", "dir", "align", "bgcolor", "role"];
+  // ── 6. Extract color info, then strip junk attributes ─────────
+  // Before stripping styles, extract meaningful color from inline elements
+  // and preserve it as a data-color attribute for downstream rendering.
+  const INLINE_TAGS = new Set(["SPAN", "FONT", "B", "I", "EM", "STRONG", "U", "S", "A", "TD", "TH", "P", "LI", "DIV", "H1", "H2", "H3", "H4", "H5", "H6"]);
+  $("*").each((_, el) => {
+    const $el = $(el);
+    const tag = ((el as any).tagName || "").toUpperCase();
+    const style = $el.attr("style") || "";
+
+    // Extract color from inline style
+    const colorMatch = style.match(/(?:^|;)\s*color\s*:\s*([^;!]+)/i);
+    if (colorMatch && INLINE_TAGS.has(tag)) {
+      const colorVal = colorMatch[1]!.trim();
+      if (colorVal) {
+        $el.attr("data-color", colorVal);
+      }
+    }
+
+    // Also check <font color="..."> attribute
+    const fontColor = $el.attr("color");
+    if (fontColor && tag === "FONT") {
+      $el.attr("data-color", fontColor);
+    }
+  });
+
+  const STRIP_ATTRS = ["style", "id", "dir", "align", "bgcolor", "role", "color"];
   $("*").each((_, el) => {
     const $el = $(el);
     for (const attr of STRIP_ATTRS) {
@@ -232,10 +266,10 @@ export function preprocessEmailDom(html: string): { html: string } {
     }
     // Strip class on all elements
     $el.removeAttr("class");
-    // Remove data-* attributes
+    // Remove data-* attributes EXCEPT data-color
     const attribs = (el as any).attribs || {};
     for (const key of Object.keys(attribs)) {
-      if (key.startsWith("data-")) {
+      if (key.startsWith("data-") && key !== "data-color") {
         $el.removeAttr(key);
       }
     }
@@ -244,9 +278,11 @@ export function preprocessEmailDom(html: string): { html: string } {
   // ── 7. Clean up whitespace / text artefacts ────────────────────
   $("wbr").remove();
 
-  // Unwrap all <span> tags (meaningless inline containers without attributes)
+  // Unwrap <span> tags — but keep colored spans (they carry data-color)
   $("span").each((_, el) => {
-    $(el).replaceWith($(el).contents());
+    const $el = $(el);
+    if ($el.attr("data-color")) return; // keep colored spans
+    $el.replaceWith($el.contents());
   });
 
   // Remove empty <div>s (but keep ones that contain images)
@@ -272,7 +308,7 @@ export function preprocessEmailDom(html: string): { html: string } {
 
 // ===== Turndown (HTML → Markdown) =====
 
-function createTurndownService(linkRegistry: LinkRegistryEntry[]): TurndownService {
+function createTurndownService(): TurndownService {
   const td = new TurndownService({
     headingStyle: "atx",
     codeBlockStyle: "fenced",
@@ -282,9 +318,7 @@ function createTurndownService(linkRegistry: LinkRegistryEntry[]): TurndownServi
     hr: "---",
   });
 
-  // === Links: emit compact placeholders 🔗⟪index⟫ ===
-  // The URL and label are stored in the linkRegistry; the placeholder is kept
-  // as short as possible so marked-terminal's reflowText cannot split it.
+  // === Links: emit standard markdown links with clean labels ===
   td.addRule("cleanLinks", {
     filter: "a",
     replacement: (content, node) => {
@@ -294,15 +328,13 @@ function createTurndownService(linkRegistry: LinkRegistryEntry[]): TurndownServi
 
       if (!text && !href) return "";
 
-      // Link wraps an image (e.g. clickable banner) — let the image pass
-      // through as-is and emit the link separately after it.
+      // Link wraps an image — let image through, add separate link below
       if (/!\[.*?\]\(.*?\)/.test(text)) {
         if (href && href.startsWith("http")) {
           let linkLabel: string;
           try { linkLabel = new URL(href).hostname; } catch { linkLabel = "link"; }
-          const idx = linkRegistry.length;
-          linkRegistry.push({ href, label: linkLabel });
-          return `${text}\n🔗⟪${idx}⟫`;
+          const safeLabel = linkLabel.replace(/[\[\]]/g, "");
+          return `${text}\n[${safeLabel}](<${href}>)`;
         }
         return text;
       }
@@ -327,111 +359,37 @@ function createTurndownService(linkRegistry: LinkRegistryEntry[]): TurndownServi
         return label;
       }
 
-      // Store in registry and emit placeholder
-      const idx = linkRegistry.length;
-      linkRegistry.push({ href, label });
-      return `🔗⟪${idx}⟫`;
+      // Emit standard markdown link — use angle brackets to handle URLs with parens
+      const safeLabel = label.replace(/[\[\]]/g, "\\$&");
+      return `[${safeLabel}](<${href}>)`;
+    },
+  });
+
+  // === Colored inline elements: preserve as inline HTML for remark ===
+  // Spans/fonts with data-color survive preprocessing.
+  // Emit them as <span data-color="...">content</span> inline HTML
+  // so remark keeps them and the renderer can extract colors.
+  td.addRule("coloredInline", {
+    filter: (node: any) => {
+      const tag = (node.nodeName || "").toUpperCase();
+      return (tag === "SPAN" || tag === "FONT") && !!node.getAttribute?.("data-color");
+    },
+    replacement: (content, node) => {
+      const el = node as any;
+      const color = (el.getAttribute?.("data-color") || "") as string;
+      if (!content.trim() || !color) return content;
+      // Emit inline HTML — remark will preserve this as html phrasing nodes
+      return `<span data-color="${color}">${content}</span>`;
     },
   });
 
   // === Table handling ===
-  // Data tables (with <th>) → markdown table syntax.
-  // Layout tables that survived preprocessing → plain blocks.
+  // Use @truto/turndown-plugin-gfm for robust GFM table conversion.
+  // Layout tables are already unwrapped in preprocessEmailDom, so
+  // only genuine data tables reach Turndown.
+  td.use(turndownTables);
 
-  // Helper: check if a <table> node has its OWN <th> elements.
-  const tableHasOwnTh = (tableNode: any): boolean => {
-    for (const child of tableNode.childNodes || []) {
-      const tag = (child.nodeName || "").toUpperCase();
-      if (tag === "THEAD") {
-        for (const row of child.childNodes || []) {
-          if ((row.nodeName || "").toUpperCase() === "TR") {
-            for (const cell of row.childNodes || []) {
-              if ((cell.nodeName || "").toUpperCase() === "TH") return true;
-            }
-          }
-        }
-      }
-      if (tag === "TR") {
-        for (const cell of child.childNodes || []) {
-          if ((cell.nodeName || "").toUpperCase() === "TH") return true;
-        }
-      }
-      if (tag === "TBODY" || tag === "TFOOT") {
-        for (const row of child.childNodes || []) {
-          if ((row.nodeName || "").toUpperCase() === "TR") {
-            for (const cell of row.childNodes || []) {
-              if ((cell.nodeName || "").toUpperCase() === "TH") return true;
-            }
-          }
-        }
-      }
-    }
-    return false;
-  };
-
-  // Helper: walk up to find closest <table> ancestor and check if data table.
-  const isInDataTable = (node: any): boolean => {
-    let parent = node.parentNode;
-    while (parent) {
-      if (parent.nodeName === "TABLE") {
-        return tableHasOwnTh(parent);
-      }
-      parent = parent.parentNode;
-    }
-    return false;
-  };
-
-  // === Images ===
-  // All images flow through Turndown's default: <img> → ![alt](src).
-  // marked-terminal's image handler then converts them to compact
-  // index-based placeholders ⬚⟪N⟫⟪alt⟫ that work even inside table cells.
-
-  td.addRule("tableCell", {
-    filter: ["th", "td"],
-    replacement: (content, node: any) => {
-      if (!isInDataTable(node)) {
-        const trimmed = content.trim();
-        return trimmed ? `\n${trimmed}\n` : "";
-      }
-      const trimmed = content.trim().replace(/\n/g, " ");
-      return ` ${trimmed} |`;
-    },
-  });
-
-  td.addRule("tableRow", {
-    filter: "tr",
-    replacement: (content, node: any) => {
-      if (!isInDataTable(node)) return content;
-      return `|${content}\n`;
-    },
-  });
-
-  td.addRule("tableHead", {
-    filter: "thead",
-    replacement: (content) => {
-      const cols = (content.match(/\|/g) || []).length - 1;
-      const separator = `|${Array(Math.max(cols, 1)).fill(" --- ").join("|")}|\n`;
-      return `${content}${separator}`;
-    },
-  });
-
-  td.addRule("tableBody", {
-    filter: "tbody",
-    replacement: (content) => content,
-  });
-
-  td.addRule("table", {
-    filter: "table",
-    replacement: (content, node: any) => {
-      if (!tableHasOwnTh(node)) {
-        if (!content.replace(/\n/g, "").trim()) return "";
-        return `\n${content}\n`;
-      }
-      return `\n\n${content}\n`;
-    },
-  });
-
-  // Strip <style> and <script> (safety net — should already be removed by DOM pass)
+  // Strip <style> and <script> (safety net)
   td.addRule("removeStyle", {
     filter: ["style", "script"],
     replacement: () => "",
@@ -447,7 +405,7 @@ function createTurndownService(linkRegistry: LinkRegistryEntry[]): TurndownServi
     replacement: () => "",
   });
 
-  // Divs as block containers (from unwrapped layout tables).
+  // Divs as block containers
   td.addRule("divBlock", {
     filter: (node: any) => {
       return node.nodeName === "DIV";
@@ -461,207 +419,45 @@ function createTurndownService(linkRegistry: LinkRegistryEntry[]): TurndownServi
   return td;
 }
 
-// ===== Marked + marked-terminal (Markdown → Terminal) =====
-
-function createMarkedInstance(width: number, imageRegistry: ImageRegistryEntry[]): Marked {
-  const instance = new Marked();
-
-  instance.use(
-    markedTerminal({
-      width,
-      reflowText: true,
-      showSectionPrefix: false,
-      unescape: true,
-      emoji: false,
-      tab: 2,
-      image: (href: string, _title: string, text: string) => {
-        // Store image in registry and output a compact index-based placeholder.
-        // This keeps placeholders short (critical for table cells!) while
-        // preserving the src URL for the UI to render <Image> components.
-        const alt = text || "image";
-        const idx = imageRegistry.length;
-        imageRegistry.push({ src: href, alt });
-        return `⬚⟪${idx}⟫⟪${alt}⟫`;
-      },
-    })
-  );
-
-  return instance;
-}
-
-// ===== Line segment parsing =====
-
-// Box-drawing characters used by marked-terminal for tables.
-export const TABLE_CHARS_RE = /[│┌┐└┘├┤┬┴┼─]/;
-
-/**
- * Parse a rendered line into segments of text, inline images, and links.
- *
- * Placeholders are split out as separate parts:
- *   - Image: ⬚⟪index⟫⟪alt⟫ → { type: "image", src, alt }
- *   - Link:  🔗⟪index⟫      → { type: "link", href, content: label } (label from registry)
- *
- * For table lines (containing box-drawing characters), images get a `tableWidth`
- * property so the renderer can pad them to preserve column alignment.
- */
-export function parseLineSegments(
-  rawLine: string,
-  imageRegistry: ImageRegistryEntry[],
-  linkRegistry: LinkRegistryEntry[] = [],
-): LinePart[] {
-  const clean = stripAnsi(rawLine);
-
-  // Fast path: no placeholders on this line
-  if (!clean.includes("⬚⟪") && !clean.includes("🔗⟪")) {
-    return [{ type: "text", content: rawLine }];
-  }
-
-  const isTableLine = TABLE_CHARS_RE.test(clean);
-
-  // Parse all placeholders (images + links) in a single pass
-  const parts: LinePart[] = [];
-  let lastIndex = 0;
-
-  for (const match of clean.matchAll(new RegExp(PLACEHOLDER_RE.source, "g"))) {
-    const matchIndex = match.index!;
-    const isImage = !!match[1]; // ⬚
-    // const isLink = !!match[2]; // 🔗
-    const idx = parseInt(match[3]!, 10);
-    const text = match[4] || "";
-
-    // Text before this placeholder
-    if (matchIndex > lastIndex) {
-      const textBefore = clean.slice(lastIndex, matchIndex);
-      if (textBefore.trim()) {
-        parts.push({ type: "text", content: textBefore });
-      }
-    }
-
-    if (isImage) {
-      const entry = imageRegistry[idx];
-      const alt = text || entry?.alt || "image";
-      const src = entry?.src || "";
-      parts.push({
-        type: "image",
-        content: alt,
-        src,
-        alt,
-        tableWidth: isTableLine ? match[0].length : undefined,
-      });
-    } else {
-      // Link placeholder
-      const entry = linkRegistry[idx];
-      let label = text || entry?.label || "";
-      const href = entry?.href || "";
-      // Fallback: if label is empty/whitespace-only, derive from the URL
-      if (!label.trim() && href) {
-        try { label = new URL(href).hostname; } catch { label = href; }
-      }
-      parts.push({
-        type: "link",
-        content: label,
-        href,
-      });
-    }
-
-    lastIndex = matchIndex + match[0].length;
-  }
-
-  // Remaining text after last placeholder
-  if (lastIndex < clean.length) {
-    const textAfter = clean.slice(lastIndex);
-    if (textAfter.trim()) {
-      parts.push({ type: "text", content: textAfter });
-    }
-  }
-
-  return parts.length > 0 ? parts : [{ type: "text", content: rawLine }];
-}
-
 // ===== Main Rendering Pipeline =====
 
-export interface RenderResult {
-  /** Terminal-formatted text (with ANSI codes), split into lines */
-  lines: string[];
-  /** Each line parsed into segments (text + inline images + links) */
-  parsedLines: LinePart[][];
-  /** Extracted links with their positions (for link navigation) */
-  links: ExtractedLink[];
-}
+// Singleton Turndown service (no mutable state unlike before)
+const turndownService = createTurndownService();
 
 /**
- * Render an HTML email body to terminal-formatted text.
+ * Render an HTML email body to a markdown AST.
  *
  * Pipeline:
  *   1. DOM preprocessing (cheerio) — sanitize, remove tracking pixels, unwrap layout tables
- *   2. Turndown — HTML → Markdown (images become ![alt](src), links become 🔗⟪index⟫)
- *   3. marked-terminal — Markdown → ANSI terminal text (images become ⬚⟪index⟫⟪alt⟫)
- *   4. Post-processing — collapse blank lines, parse inline segments, build link list
+ *   2. Turndown — HTML → Markdown (standard syntax, no placeholders)
+ *   3. remark — Markdown → mdast (abstract syntax tree)
+ *   4. Extract links for Tab-navigation
  */
-export function renderHtmlEmail(html: string, width: number = 80): RenderResult {
-  // Step 1: DOM-based preprocessing (leaves <img> intact)
+export function htmlToMdast(html: string): EmailRenderResult {
+  // Step 1: DOM-based preprocessing
   const { html: cleanedHtml } = preprocessEmailDom(html);
 
   // Step 2: Convert HTML to Markdown via Turndown
-  // Link registry collects href+label; placeholders use compact 🔗⟪index⟫ format
-  const linkRegistry: LinkRegistryEntry[] = [];
-  const td = createTurndownService(linkRegistry);
-  const markdown = td.turndown(cleanedHtml);
+  const markdown = turndownService.turndown(cleanedHtml);
 
-  // Step 3: Render Markdown to terminal text via marked-terminal
-  // Image registry collects src URLs; placeholders use compact ⬚⟪index⟫⟪alt⟫ format
-  const imageRegistry: ImageRegistryEntry[] = [];
-  const markedInstance = createMarkedInstance(width, imageRegistry);
-  const terminalText = markedInstance.parse(markdown) as string;
+  // Step 3: Parse Markdown to mdast via remark
+  const root = parseMarkdown(markdown);
 
-  // Step 4: Collapse excessive blank lines
-  const rawLines = terminalText.split("\n");
-  const lines: string[] = [];
-  let blankCount = 0;
-  for (const line of rawLines) {
-    const stripped = stripAnsi(line).trim();
-    if (stripped === "") {
-      blankCount++;
-      if (blankCount <= 1) lines.push(line);
-    } else {
-      blankCount = 0;
-      lines.push(line);
-    }
-  }
-  while (lines.length > 0 && stripAnsi(lines[0]!).trim() === "") lines.shift();
-  while (lines.length > 0 && stripAnsi(lines[lines.length - 1]!).trim() === "") lines.pop();
+  // Step 4: Extract links for navigation
+  const links = extractLinks(root);
 
-  // Step 5: Parse each line into segments (text + images + links)
-  const parsedLines: LinePart[][] = lines.map(line =>
-    parseLineSegments(line, imageRegistry, linkRegistry),
-  );
-
-  // Step 6: Build link list from parsed link parts (for link navigation)
-  const links: ExtractedLink[] = [];
-  let linkCounter = 0;
-
-  for (let i = 0; i < parsedLines.length; i++) {
-    for (const part of parsedLines[i]!) {
-      if (part.type === "link" && part.href) {
-        const id = `link-${++linkCounter}`;
-        links.push({ id, href: part.href, label: part.content, lineIndex: i });
-      }
-    }
-  }
-
-  return { lines, parsedLines, links };
+  return { root, links };
 }
 
 /**
- * Render a plain text email body (for emails without HTML).
+ * Parse a plain text email body into a markdown AST.
+ * Plain text is parsed through remark so that any natural markdown-like
+ * formatting (lists, emphasis, URLs) is preserved.
  */
-export function renderPlainTextEmail(text: string): RenderResult {
-  const lines = text.split("\n");
-  return {
-    lines,
-    parsedLines: lines.map(l => [{ type: "text" as const, content: l }]),
-    links: [],
-  };
+export function textToMdast(text: string): EmailRenderResult {
+  const root = parseMarkdown(text);
+  const links = extractLinks(root);
+  return { root, links };
 }
 
 /**

@@ -1,5 +1,5 @@
-import React, { useMemo, useRef, useEffect, useCallback } from "react";
-import { Box, Text, Image, ScrollView, Input, useApp, FocusScope, Link, useScrollIntoView } from "@semos-labs/glyph";
+import React, { useMemo, useRef, useEffect } from "react";
+import { Box, Text, ScrollView, Input, useApp, FocusScope, useScrollIntoView } from "@semos-labs/glyph";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
   selectedEmailAtom,
@@ -61,25 +61,9 @@ import { registry } from "../keybinds/registry.ts";
 import { formatFullDate } from "../domain/time.ts";
 import { formatEmailAddress, formatEmailAddresses, type CalendarEvent, type Email, type Thread } from "../domain/email.ts";
 import { icons } from "./icons.ts";
-import { renderHtmlEmail, renderPlainTextEmail, TABLE_CHARS_RE, type LinePart } from "../utils/htmlRenderer.ts";
+import { htmlToMdast, textToMdast, type EmailRenderResult } from "../utils/htmlRenderer.ts";
+import { MarkdownRenderer } from "./MarkdownRenderer.tsx";
 import { DateTime } from "luxon";
-const InlineLink = React.memo(function InlineLink({ href, label, isActive, disabled }: { href: string; label?: string; isActive: boolean; disabled: boolean }) {
-  // Ensure we always show something — fall back to hostname or raw URL
-  let displayLabel = label;
-  if (!displayLabel?.trim()) {
-    try { displayLabel = new URL(href).hostname; } catch { displayLabel = href; }
-  }
-  return (
-    <Link
-      href={href}
-      disabled={disabled}
-      style={{ underline: true, ...(isActive && { bg: "cyan", color: "black" }) }}
-      focusedStyle={!isActive ? { bg: "blackBright" } : undefined}
-    >
-      <Text>{displayLabel}</Text>
-    </Link>
-  );
-});
 
 function ViewKeybinds({ hasCalendarInvite }: { hasCalendarInvite?: boolean }) {
   const attachmentsFocused = useAtomValue(attachmentsFocusedAtom);
@@ -544,258 +528,29 @@ function CalendarInviteSection({ event, inviteFocused, onRsvp }: {
   );
 }
 
-// ===== Line System =====
-
-interface ExpandedLine {
-  /** Inline segments: text, image, and link parts */
-  parts: LinePart[];
-  /** The raw rendered line (with ANSI codes) */
-  rawContent: string;
-  /** Index in the original lines[] */
-  originalIndex: number;
-}
-
-// Strip ANSI codes for content analysis
-const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
-function stripAnsi(s: string): string { return s.replace(ANSI_RE, ""); }
-
-// Detect if a line is a quoted line
-const QUOTE_RE = /^(\s*>)+/;
-const ON_WROTE_RE = /^On .+ wrote:$/;
-function isQuotedLine(raw: string): boolean {
-  const clean = stripAnsi(raw).trim();
-  return QUOTE_RE.test(clean) || ON_WROTE_RE.test(clean);
-}
-
-// Group expanded lines into segments: { type: "lines" | "quote", items, startIndex }
-interface LineSegment {
-  kind: "lines";
-  items: ExpandedLine[];
-  startIndex: number;
-}
-interface QuoteSegment {
-  kind: "quote";
-  items: ExpandedLine[];
-  startIndex: number;
-  lineCount: number;
-}
-type Segment = LineSegment | QuoteSegment;
-
-function groupQuotedSegments(lines: ExpandedLine[]): Segment[] {
-  const segments: Segment[] = [];
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i]!;
-    // A line is "quoted" only if it has no images and its raw content is a quote
-    const hasImages = line.parts.some(p => p.type === "image");
-    if (!hasImages && isQuotedLine(line.rawContent)) {
-      const start = i;
-      const quotedItems: ExpandedLine[] = [];
-      while (i < lines.length) {
-        const l = lines[i]!;
-        const lHasImages = l.parts.some(p => p.type === "image");
-        if (lHasImages || !isQuotedLine(l.rawContent)) break;
-        quotedItems.push(l);
-        i++;
-      }
-      segments.push({ kind: "quote", items: quotedItems, startIndex: start, lineCount: quotedItems.length });
-    } else {
-      const start = i;
-      const items: ExpandedLine[] = [];
-      while (i < lines.length) {
-        const l = lines[i]!;
-        const lHasImages = l.parts.some(p => p.type === "image");
-        if (!lHasImages && isQuotedLine(l.rawContent)) break;
-        items.push(l);
-        i++;
-      }
-      segments.push({ kind: "lines", items, startIndex: start });
-    }
-  }
-  return segments;
-}
-
-/** Collapsible quoted text block */
-function QuotedBlock({ items, quoteIndex }: { items: ExpandedLine[]; quoteIndex: number }) {
-  const [expanded, setExpanded] = React.useState(false);
-  const toggle = useCallback(() => setExpanded(e => !e), []);
-
-  if (!expanded) {
-    return (
-      <Box style={{ flexDirection: "row" }}>
-        <Text style={{ dim: true }}>
-          ··· {items.length} quoted {items.length === 1 ? "line" : "lines"} ···
-        </Text>
-      </Box>
-    );
-  }
-
-  return (
-    <>
-      <Box style={{ flexDirection: "row" }}>
-        <Text style={{ dim: true }}>··· quoted text ···</Text>
-      </Box>
-      {items.map((item, idx) => (
-        <Box key={`q${quoteIndex}-${idx}`} style={{ flexDirection: "row" }}>
-          <Text style={{ dim: true }}>{item.parts[0]?.content || item.rawContent || " "}</Text>
-        </Box>
-      ))}
-    </>
-  );
-}
-
-/** Renders a single message's body content (lines, images, links) */
+/** Renders a single message's body content using the mdast → Glyph renderer */
 function MessageContent({ email, linkIndexOffset, activeLinkIndex, viewFocused }: {
   email: Email;
   linkIndexOffset: number;
   activeLinkIndex: number;
   viewFocused: boolean;
 }) {
-  const { columns: terminalWidth } = useApp();
-
   const renderResult = useMemo(() => {
-    const width = Math.max(40, terminalWidth - 6);
     if (email.bodyHtml && !email.calendarEvent) {
-      return renderHtmlEmail(email.bodyHtml, width);
+      return htmlToMdast(email.bodyHtml);
     }
-    return renderPlainTextEmail(email.body);
-  }, [email.id, email.bodyHtml, email.body, email.calendarEvent, terminalWidth]);
-
-  const expandedLines: ExpandedLine[] = useMemo(() => {
-    if (!renderResult) return [];
-    const { lines, parsedLines } = renderResult;
-    return lines.map((line, i) => ({
-      parts: parsedLines[i] || [{ type: "text" as const, content: line }],
-      rawContent: line,
-      originalIndex: i,
-    }));
-  }, [renderResult]);
-
-  // Group lines into quoted/non-quoted segments
-  const segments = useMemo(() => groupQuotedSegments(expandedLines), [expandedLines]);
+    return textToMdast(email.body);
+  }, [email.id, email.bodyHtml, email.body, email.calendarEvent]);
 
   if (!renderResult) return null;
 
-  let quoteIdx = 0;
-  let linkCounter = 0;
-
   return (
-    <>
-      {segments.map((seg, segIdx) => {
-        if (seg.kind === "quote") {
-          const qi = quoteIdx++;
-          // Count links in quoted segments for global index tracking
-          for (const item of seg.items) {
-            linkCounter += item.parts.filter(p => p.type === "link").length;
-          }
-          return (
-            <QuotedBlock
-              key={`quote-${segIdx}`}
-              items={seg.items}
-              quoteIndex={qi}
-            />
-          );
-        }
-
-        // Regular lines
-        return seg.items.map((item, index) => {
-          const key = `${seg.startIndex}-${index}`;
-          const hasImages = item.parts.some(p => p.type === "image");
-          const hasLinks = item.parts.some(p => p.type === "link");
-
-          // Line with inline image(s) — render each segment
-          if (hasImages) {
-            // If images appear inside a box-drawing table line, render them
-            // inline (row direction) so the table structure is preserved.
-            const isTableLine = item.parts.some(
-              p => p.type === "text" && TABLE_CHARS_RE.test(p.content),
-            );
-
-            if (isTableLine) {
-              return (
-                <Box key={key} style={{ flexDirection: "row" }}>
-                  {item.parts.map((part, pi) => {
-                    if (part.type === "image" && part.src) {
-                      return (
-                        <Image
-                          key={pi}
-                          src={part.src}
-                          placeholder={part.alt || "image"}
-                          style={{ border: "none", width: part.tableWidth }}
-                          autoLoad={false}
-                          autoSize
-                          maxHeight={2}
-                          disabled={!viewFocused}
-                        />
-                      );
-                    }
-                    if (part.type === "link" && part.href) {
-                      const globalIdx = linkIndexOffset + linkCounter;
-                      linkCounter++;
-                      return <InlineLink key={pi} href={part.href} label={part.content} isActive={activeLinkIndex === globalIdx} disabled={!viewFocused} />;
-                    }
-                    return <Text key={pi}>{part.content}</Text>;
-                  })}
-                </Box>
-              );
-            }
-
-            return (
-              <Box key={key} style={{ flexDirection: "column" }}>
-                {item.parts.map((part, pi) => {
-                  if (part.type === "image" && part.src) {
-                    return (
-                      <Image
-                        key={pi}
-                        src={part.src}
-                        placeholder={part.alt || "image"}
-                        placeholderStyle={{ paddingX: 1 }}
-                        focusedStyle={{ bg: "blackBright" }}
-                        style={{ border: "none" }}
-                        autoLoad={false}
-                        autoSize
-                        maxHeight={20}
-                        disabled={!viewFocused}
-                      />
-                    );
-                  }
-                  if (part.type === "link" && part.href) {
-                    const globalIdx = linkIndexOffset + linkCounter;
-                    linkCounter++;
-                    return <InlineLink key={pi} href={part.href} label={part.content} isActive={activeLinkIndex === globalIdx} disabled={!viewFocused} />;
-                  }
-                  return <Text key={pi}>{part.content}</Text>;
-                })}
-              </Box>
-            );
-          }
-
-          // Line with link(s) — render parts inline
-          if (hasLinks) {
-            return (
-              <Box key={key} style={{ flexDirection: "row" }}>
-                {item.parts.map((part, pi) => {
-                  if (part.type === "link" && part.href) {
-                    const globalIdx = linkIndexOffset + linkCounter;
-                    linkCounter++;
-                    return <InlineLink key={pi} href={part.href} label={part.content} isActive={activeLinkIndex === globalIdx} disabled={!viewFocused} />;
-                  }
-                  return <Text key={pi}>{part.content}</Text>;
-                })}
-              </Box>
-            );
-          }
-
-          // Plain text line
-          const textContent = item.parts[0]?.content || item.rawContent || " ";
-          return (
-            <Box key={key} style={{ flexDirection: "row" }}>
-              <Text>{textContent}</Text>
-            </Box>
-          );
-        });
-      })}
-    </>
+    <MarkdownRenderer
+      root={renderResult.root}
+      linkIndexOffset={linkIndexOffset}
+      activeLinkIndex={activeLinkIndex}
+      viewFocused={viewFocused}
+    />
   );
 }
 
@@ -816,17 +571,11 @@ function EmailBody({ availableHeight, viewFocused }: { availableHeight: number; 
     const links: { href: string; lineIndex: number }[] = [];
     const messages = thread.count > 1 ? thread.messages : (email ? [email] : []);
     for (const msg of messages) {
-      const width = 80; // approximate
-      let result;
-      if (msg.bodyHtml && !msg.calendarEvent) {
-        result = renderHtmlEmail(msg.bodyHtml, width);
-      } else {
-        result = renderPlainTextEmail(msg.body);
-      }
-      if (result) {
+      const result = msg.bodyHtml && !msg.calendarEvent
+        ? htmlToMdast(msg.bodyHtml)
+        : textToMdast(msg.body);
         for (const link of result.links) {
           links.push({ href: link.href, lineIndex: links.length });
-        }
       }
     }
     return links;
@@ -861,11 +610,10 @@ function EmailBody({ availableHeight, viewFocused }: { availableHeight: number; 
         >
           {messages.map((msg, idx) => {
             const msgOffset = linkOffset;
-            const msgResult = (() => {
-              if (msg.bodyHtml && !msg.calendarEvent) return renderHtmlEmail(msg.bodyHtml, 80);
-              return renderPlainTextEmail(msg.body);
-            })();
-            const msgLinkCount = msgResult?.links?.length || 0;
+            const msgResult = msg.bodyHtml && !msg.calendarEvent
+              ? htmlToMdast(msg.bodyHtml)
+              : textToMdast(msg.body);
+            const msgLinkCount = msgResult.links.length;
             linkOffset += msgLinkCount;
             const isMsgFocused = idx === resolvedFocusIdx;
 
