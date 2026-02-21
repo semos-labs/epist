@@ -16,7 +16,8 @@
     "release:major:rc": "bun scripts/release.ts --major --rc"
   },
   "dependencies": {
-    "@semos-labs/glyph": "^0.2.4",
+    "@semos-labs/glyph": "^0.2.8",
+    "@semos-labs/glyph-markdown": "^0.2.8",
     "@truto/turndown-plugin-gfm": "^1.0.2",
     "cheerio": "^1.2.0",
     "chrono-node": "^2.8.0",
@@ -28,11 +29,8 @@
     "nodemailer": "^8.0.1",
     "react": "^19.0.0",
     "react-error-boundary": "^6.1.0",
-    "remark-gfm": "^4.0.1",
-    "remark-parse": "^11.0.0",
     "smol-toml": "^1.6.0",
     "turndown": "^7.2.2",
-    "unified": "^11.0.5",
     "zod": "^3.24.2"
   },
   "devDependencies": {

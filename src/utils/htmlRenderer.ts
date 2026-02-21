@@ -1,14 +1,12 @@
 import TurndownService from "turndown";
 import { tables as turndownTables } from "@truto/turndown-plugin-gfm";
 import * as cheerio from "cheerio";
-import { unified } from "unified";
-import remarkParse from "remark-parse";
-import remarkGfm from "remark-gfm";
-import type { Root, RootContent, PhrasingContent } from "mdast";
+import { parseMarkdown } from "@semos-labs/glyph-markdown";
+import type { Root } from "mdast";
 
 // ===== Exported types =====
 
-export type { Root, RootContent, PhrasingContent } from "mdast";
+export type { Root } from "mdast";
 
 export interface ExtractedLink {
   id: string;
@@ -20,19 +18,15 @@ export interface ExtractedLink {
 }
 
 export interface EmailRenderResult {
-  /** Parsed markdown AST */
+  /** Markdown string ready for rendering via <Markdown> */
+  markdown: string;
+  /** Parsed markdown AST (used for link extraction and testing) */
   root: Root;
   /** All links found in the content (for Tab-navigation) */
   links: ExtractedLink[];
 }
 
 // ===== Mdast helpers =====
-
-const remarkParser = unified().use(remarkParse).use(remarkGfm);
-
-function parseMarkdown(md: string): Root {
-  return remarkParser.parse(md);
-}
 
 /** Extract plain text content from any mdast node */
 export function getTextContent(node: any): string {
@@ -425,39 +419,33 @@ function createTurndownService(): TurndownService {
 const turndownService = createTurndownService();
 
 /**
- * Render an HTML email body to a markdown AST.
+ * Render an HTML email body to markdown.
  *
  * Pipeline:
  *   1. DOM preprocessing (cheerio) — sanitize, remove tracking pixels, unwrap layout tables
  *   2. Turndown — HTML → Markdown (standard syntax, no placeholders)
- *   3. remark — Markdown → mdast (abstract syntax tree)
- *   4. Extract links for Tab-navigation
+ *   3. Parse to mdast for link extraction
+ *
+ * The returned `markdown` string is passed directly to Glyph's `<Markdown>` component.
  */
-export function htmlToMdast(html: string): EmailRenderResult {
-  // Step 1: DOM-based preprocessing
+export function htmlToMarkdown(html: string): EmailRenderResult {
   const { html: cleanedHtml } = preprocessEmailDom(html);
-
-  // Step 2: Convert HTML to Markdown via Turndown
   const markdown = turndownService.turndown(cleanedHtml);
-
-  // Step 3: Parse Markdown to mdast via remark
   const root = parseMarkdown(markdown);
-
-  // Step 4: Extract links for navigation
   const links = extractLinks(root);
 
-  return { root, links };
+  return { markdown, root, links };
 }
 
 /**
- * Parse a plain text email body into a markdown AST.
+ * Parse a plain text email body into markdown.
  * Plain text is parsed through remark so that any natural markdown-like
  * formatting (lists, emphasis, URLs) is preserved.
  */
-export function textToMdast(text: string): EmailRenderResult {
+export function textToMarkdown(text: string): EmailRenderResult {
   const root = parseMarkdown(text);
   const links = extractLinks(root);
-  return { root, links };
+  return { markdown: text, root, links };
 }
 
 /**

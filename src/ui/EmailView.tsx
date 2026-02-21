@@ -11,7 +11,6 @@ import {
   focusedMessageIndexAtom,
   attachmentsFocusedAtom,
   selectedAttachmentIndexAtom,
-  focusedImageIndexAtom,
   imageNavModeAtom,
   inlineReplyOpenAtom,
   inlineReplyContentAtom,
@@ -61,8 +60,8 @@ import { registry } from "../keybinds/registry.ts";
 import { formatFullDate } from "../domain/time.ts";
 import { formatEmailAddress, formatEmailAddresses, type CalendarEvent, type Email, type Thread } from "../domain/email.ts";
 import { icons } from "./icons.ts";
-import { htmlToMdast, textToMdast, type EmailRenderResult } from "../utils/htmlRenderer.ts";
-import { MarkdownRenderer } from "./MarkdownRenderer.tsx";
+import { htmlToMarkdown, textToMarkdown } from "../utils/htmlRenderer.ts";
+import { Markdown } from "@semos-labs/glyph-markdown";
 import { DateTime } from "luxon";
 
 function ViewKeybinds({ hasCalendarInvite }: { hasCalendarInvite?: boolean }) {
@@ -387,12 +386,9 @@ function DebugHtmlView({ email }: { email: Email }) {
 }
 
 /** A complete message card — header, calendar invite, attachments, body, actions */
-function MessageCard({ email, isFocused, linkIndexOffset, activeLinkIndex, viewFocused }: {
+function MessageCard({ email, isFocused }: {
   email: Email;
   isFocused: boolean;
-  linkIndexOffset: number;
-  activeLinkIndex: number;
-  viewFocused: boolean;
 }) {
   const expandedHeaders = useAtomValue(expandedHeadersAtom);
   const expanded = !!expandedHeaders[email.id];
@@ -443,7 +439,7 @@ function MessageCard({ email, isFocused, linkIndexOffset, activeLinkIndex, viewF
       {/* Body content */}
       <Box style={{ paddingX: 1 }}>
         <Box style={{ flexDirection: "column" }}>
-          <MessageContent email={email} linkIndexOffset={linkIndexOffset} activeLinkIndex={activeLinkIndex} viewFocused={viewFocused} />
+          <MessageContent email={email} />
         </Box>
       </Box>
 
@@ -528,30 +524,16 @@ function CalendarInviteSection({ event, inviteFocused, onRsvp }: {
   );
 }
 
-/** Renders a single message's body content using the mdast → Glyph renderer */
-function MessageContent({ email, linkIndexOffset, activeLinkIndex, viewFocused }: {
-  email: Email;
-  linkIndexOffset: number;
-  activeLinkIndex: number;
-  viewFocused: boolean;
-}) {
-  const renderResult = useMemo(() => {
+/** Renders a single message's body content using Glyph's Markdown component */
+function MessageContent({ email }: { email: Email }) {
+  const markdown = useMemo(() => {
     if (email.bodyHtml && !email.calendarEvent) {
-      return htmlToMdast(email.bodyHtml);
+      return htmlToMarkdown(email.bodyHtml).markdown;
     }
-    return textToMdast(email.body);
+    return textToMarkdown(email.body).markdown;
   }, [email.id, email.bodyHtml, email.body, email.calendarEvent]);
 
-  if (!renderResult) return null;
-
-  return (
-    <MarkdownRenderer
-      root={renderResult.root}
-      linkIndexOffset={linkIndexOffset}
-      activeLinkIndex={activeLinkIndex}
-      viewFocused={viewFocused}
-    />
-  );
+  return <Markdown highlight={false}>{markdown}</Markdown>;
 }
 
 
@@ -562,7 +544,6 @@ function EmailBody({ availableHeight, viewFocused }: { availableHeight: number; 
   const setScrollOffset = useSetAtom(viewScrollOffsetAtom);
   const imageNavMode = useAtomValue(imageNavModeAtom);
   const setEmailLinks = useSetAtom(emailLinksAtom);
-  const activeLinkIdx = useAtomValue(activeLinkIndexAtom);
   const focusedMsgIdx = useAtomValue(focusedMessageIndexAtom);
 
   // Collect all links from the thread for the link navigation system
@@ -572,8 +553,8 @@ function EmailBody({ availableHeight, viewFocused }: { availableHeight: number; 
     const messages = thread.count > 1 ? thread.messages : (email ? [email] : []);
     for (const msg of messages) {
       const result = msg.bodyHtml && !msg.calendarEvent
-        ? htmlToMdast(msg.bodyHtml)
-        : textToMdast(msg.body);
+        ? htmlToMarkdown(msg.bodyHtml)
+        : textToMarkdown(msg.body);
         for (const link of result.links) {
           links.push({ href: link.href, lineIndex: links.length });
       }
@@ -593,9 +574,6 @@ function EmailBody({ availableHeight, viewFocused }: { availableHeight: number; 
   const messages = isConversation ? thread.messages : [email];
   const resolvedFocusIdx = focusedMsgIdx < 0 ? 0 : focusedMsgIdx;
 
-  // Calculate link index offsets per message
-  let linkOffset = 0;
-
   return (
     <Box style={{ flexGrow: 1, flexDirection: "column" }}>
       <FocusScope trap={imageNavMode}>
@@ -609,12 +587,6 @@ function EmailBody({ availableHeight, viewFocused }: { availableHeight: number; 
           virtualized
         >
           {messages.map((msg, idx) => {
-            const msgOffset = linkOffset;
-            const msgResult = msg.bodyHtml && !msg.calendarEvent
-              ? htmlToMdast(msg.bodyHtml)
-              : textToMdast(msg.body);
-            const msgLinkCount = msgResult.links.length;
-            linkOffset += msgLinkCount;
             const isMsgFocused = idx === resolvedFocusIdx;
 
             return (
@@ -622,9 +594,6 @@ function EmailBody({ availableHeight, viewFocused }: { availableHeight: number; 
                 <MessageCard
                   email={msg}
                   isFocused={isMsgFocused}
-                  linkIndexOffset={msgOffset}
-                  activeLinkIndex={activeLinkIdx}
-                  viewFocused={viewFocused}
                 />
               </Box>
             );

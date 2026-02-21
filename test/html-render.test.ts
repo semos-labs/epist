@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { htmlToMdast, preprocessEmailDom, stripAnsi, getTextContent, extractLinks } from "../src/utils/htmlRenderer.ts";
+import { htmlToMarkdown, preprocessEmailDom, stripAnsi, getTextContent, extractLinks } from "../src/utils/htmlRenderer.ts";
 import { join } from "path";
 import type { Root, RootContent, Table, TableRow, TableCell } from "mdast";
 
@@ -65,8 +65,8 @@ test("preprocessEmailDom removes the raw-markdown preview div", () => {
   console.log(`"Here's what you'll find" appears ${count} time(s) in preprocessed HTML`);
 });
 
-test("htmlToMdast produces a well-formed AST with links and content", () => {
-  const result = htmlToMdast(html);
+test("htmlToMarkdown produces a well-formed AST with links and content", () => {
+  const result = htmlToMarkdown(html);
   const { root, links } = result;
 
   const fullText = collectText(root);
@@ -110,8 +110,8 @@ test("htmlToMdast produces a well-formed AST with links and content", () => {
   walkImages(root);
 });
 
-test("htmlToMdast extracts links correctly", () => {
-  const result = htmlToMdast(html);
+test("htmlToMarkdown extracts links correctly", () => {
+  const result = htmlToMarkdown(html);
   const { links } = result;
 
   // Should have found links
@@ -125,7 +125,7 @@ test("htmlToMdast extracts links correctly", () => {
   }
 });
 
-test("htmlToMdast handles blockquotes as separate nodes", () => {
+test("htmlToMarkdown handles blockquotes as separate nodes", () => {
   // Create HTML with a blockquote
   const htmlWithQuote = `
     <div>
@@ -136,7 +136,7 @@ test("htmlToMdast handles blockquotes as separate nodes", () => {
     </div>
   `;
 
-  const result = htmlToMdast(htmlWithQuote);
+  const result = htmlToMarkdown(htmlWithQuote);
   const quoteCount = countNodes(result.root, "blockquote");
   expect(quoteCount).toBeGreaterThanOrEqual(1);
 });
@@ -165,7 +165,7 @@ test("DOM preprocessing intermediate output (for debugging)", async () => {
 });
 
 test("remark AST structure (for debugging)", () => {
-  const result = htmlToMdast(html);
+  const result = htmlToMarkdown(html);
 
   // Print the AST node types at the top level
   const topLevelTypes = result.root.children.map(c => c.type);
@@ -190,8 +190,8 @@ test("remark AST structure (for debugging)", () => {
 
 const html2 = await Bun.file(join(import.meta.dir, "example2.html")).text();
 
-test("example2: htmlToMdast — GitHub Actions email", () => {
-  const result = htmlToMdast(html2);
+test("example2: htmlToMarkdown — GitHub Actions email", () => {
+  const result = htmlToMarkdown(html2);
   const fullText = collectText(result.root);
   const imageCount = countNodes(result.root, "image");
 
@@ -245,7 +245,7 @@ describe("Table integrity", () => {
       </tbody>
     </table>`;
 
-    const { root } = htmlToMdast(html);
+    const { root } = htmlToMarkdown(html);
     const table = findTable(root);
     expect(table).toBeDefined();
     expect(table!.children).toHaveLength(3); // header + 2 data rows
@@ -265,7 +265,7 @@ describe("Table integrity", () => {
       <tbody><tr><td>Name</td><td>Alice</td></tr></tbody>
     </table>`;
 
-    const { root } = htmlToMdast(html);
+    const { root } = htmlToMarkdown(html);
     const table = findTable(root);
     expect(table).toBeDefined();
     expect(table!.children).toHaveLength(2);
@@ -286,7 +286,7 @@ describe("Table integrity", () => {
       </tbody>
     </table>`;
 
-    const { root } = htmlToMdast(html);
+    const { root } = htmlToMarkdown(html);
     const table = findTable(root);
     expect(table).toBeDefined();
     expect(table!.children).toHaveLength(3);
@@ -309,7 +309,7 @@ describe("Table integrity", () => {
       </tbody>
     </table>`;
 
-    const { root } = htmlToMdast(html);
+    const { root } = htmlToMarkdown(html);
     const table = findTable(root);
     expect(table).toBeDefined();
     expect(table!.children).toHaveLength(2);
@@ -337,7 +337,7 @@ describe("Table integrity", () => {
       </tbody>
     </table>`;
 
-    const { root, links } = htmlToMdast(html);
+    const { root, links } = htmlToMarkdown(html);
     const table = findTable(root);
     expect(table).toBeDefined();
 
@@ -365,7 +365,7 @@ describe("Table integrity", () => {
       </tbody>
     </table>`;
 
-    const { root } = htmlToMdast(html);
+    const { root } = htmlToMarkdown(html);
     const table = findTable(root);
     expect(table).toBeDefined();
 
@@ -380,7 +380,7 @@ describe("Table integrity", () => {
       <tr><td>1</td><td>2</td><td>3</td></tr>
     </table>`;
 
-    const { root } = htmlToMdast(html);
+    const { root } = htmlToMarkdown(html);
     const table = findTable(root);
     // 3+ column tables without <th> survive the heuristic
     expect(table).toBeDefined();
@@ -397,7 +397,7 @@ describe("Table integrity", () => {
       <tr><td><p>World</p></td></tr>
     </table>`;
 
-    const { root } = htmlToMdast(html);
+    const { root } = htmlToMarkdown(html);
     const table = findTable(root);
     expect(table).toBeUndefined(); // should be unwrapped
 
@@ -419,7 +419,7 @@ describe("Table integrity", () => {
       </td></tr>
     </table>`;
 
-    const { root } = htmlToMdast(html);
+    const { root } = htmlToMarkdown(html);
     const table = findTable(root);
     expect(table).toBeDefined();
     expect(table!.children).toHaveLength(2); // header + 1 data row
@@ -435,7 +435,7 @@ describe("Table integrity", () => {
   });
 
   test("GitHub Actions email: table with image + bold + link", () => {
-    const { root, links } = htmlToMdast(html2);
+    const { root, links } = htmlToMarkdown(html2);
     const table = findTable(root);
     expect(table).toBeDefined();
 
@@ -478,7 +478,7 @@ describe("Table integrity", () => {
       </table>
     </td></tr></table>`;
 
-    const { root } = htmlToMdast(html);
+    const { root } = htmlToMarkdown(html);
     const table = findTable(root);
     expect(table).toBeDefined();
 
@@ -506,7 +506,7 @@ describe("Table integrity", () => {
         <tbody><tr><td>4</td><td>5</td><td>6</td></tr></tbody>
       </table>`;
 
-    const { root } = htmlToMdast(html);
+    const { root } = htmlToMarkdown(html);
     const tables = root.children.filter((n): n is Table => n.type === "table");
     expect(tables).toHaveLength(2);
 
