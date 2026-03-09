@@ -386,9 +386,10 @@ function DebugHtmlView({ email }: { email: Email }) {
 }
 
 /** A complete message card — header, calendar invite, attachments, body, actions */
-function MessageCard({ email, isFocused }: {
+function MessageCard({ email, isFocused, viewFocused }: {
   email: Email;
   isFocused: boolean;
+  viewFocused: boolean;
 }) {
   const expandedHeaders = useAtomValue(expandedHeadersAtom);
   const expanded = !!expandedHeaders[email.id];
@@ -437,9 +438,9 @@ function MessageCard({ email, isFocused }: {
       {showDebugHtml && <DebugHtmlView email={email} />}
 
       {/* Body content */}
-      <Box style={{ paddingX: 1 }}>
-        <Box style={{ flexDirection: "column" }}>
-          <MessageContent email={email} />
+      <Box style={{ paddingX: 1, flexShrink: 1 }}>
+        <Box style={{ flexDirection: "column", flexShrink: 1 }}>
+          <MessageContent email={email} viewFocused={viewFocused} />
         </Box>
       </Box>
 
@@ -525,7 +526,7 @@ function CalendarInviteSection({ event, inviteFocused, onRsvp }: {
 }
 
 /** Renders a single message's body content using Glyph's Markdown component */
-function MessageContent({ email }: { email: Email }) {
+function MessageContent({ email, viewFocused }: { email: Email; viewFocused: boolean }) {
   const markdown = useMemo(() => {
     if (email.bodyHtml && !email.calendarEvent) {
       return htmlToMarkdown(email.bodyHtml).markdown;
@@ -533,7 +534,7 @@ function MessageContent({ email }: { email: Email }) {
     return textToMarkdown(email.body).markdown;
   }, [email.id, email.bodyHtml, email.body, email.calendarEvent]);
 
-  return <Markdown highlight={false}>{markdown}</Markdown>;
+  return <Markdown highlight={false} style={{ flexShrink: 1 }}>{markdown}</Markdown>;
 }
 
 
@@ -594,6 +595,7 @@ function EmailBody({ availableHeight, viewFocused }: { availableHeight: number; 
                 <MessageCard
                   email={msg}
                   isFocused={isMsgFocused}
+                  viewFocused={viewFocused}
                 />
               </Box>
             );
@@ -691,6 +693,7 @@ export function EmailView() {
     <Box
       style={{
         flexGrow: 1,
+        flexShrink: 1,
         height: "100%",
         flexDirection: "column",
         paddingX: 1,

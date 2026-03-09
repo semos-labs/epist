@@ -5,7 +5,7 @@
     "": {
       "name": "epist",
       "dependencies": {
-        "@semos-labs/glyph": "^0.2.8",
+        "@semos-labs/glyph": "^0.2.10",
         "@semos-labs/glyph-markdown": "^0.2.8",
         "@truto/turndown-plugin-gfm": "^1.0.2",
         "cheerio": "^1.2.0",
@@ -103,7 +103,7 @@
 
     "@selderee/plugin-htmlparser2": ["@selderee/plugin-htmlparser2@0.11.0", "", { "dependencies": { "domhandler": "^5.0.3", "selderee": "^0.11.0" } }, "sha512-P33hHGdldxGabLFjPPpaTxVolMrzrcegejx+0GxjrIb9Zv48D8yAIA/QTDR2dFl7Uz7urX8aX6+5bCZslr+gWQ=="],
 
-    "@semos-labs/glyph": ["@semos-labs/glyph@0.2.8", "", { "dependencies": { "react-reconciler": "^0.31.0", "string-width": "^7.2.0", "yoga-layout": "^3.2.1" }, "peerDependencies": { "react": "^18.0.0 || ^19.0.0" } }, "sha512-/aOG6dwW2bzOUlsZfNsYa6eJnL2whrEKPKOeaKB7RyBrb5gvHySDkadtj3fFxcWPWKDMhOluQNYhZTluU7YSWA=="],
+    "@semos-labs/glyph": ["@semos-labs/glyph@0.2.10", "", { "dependencies": { "react-reconciler": "^0.31.0", "string-width": "^7.2.0", "yoga-layout": "^3.2.1" }, "peerDependencies": { "react": "^18.0.0 || ^19.0.0" } }, "sha512-xPtWDJAVnJG8Qcji2gXX1RtZslXKvoZQ3nQeZaaVx1Elhg2K95kFPnXAQeAN07huJpj+PPU28FCgC8Fl1CB1wA=="],
 
     "@semos-labs/glyph-markdown": ["@semos-labs/glyph-markdown@0.2.8", "", { "dependencies": { "remark-gfm": "^4.0.1", "remark-parse": "^11.0.0", "shiki": "^3.0.0", "unified": "^11.0.5" }, "peerDependencies": { "@semos-labs/glyph": ">=0.2.0", "react": "^18.0.0 || ^19.0.0" } }, "sha512-COXZvKxFX3aFtdKbQ9XnTnF9c5dcfO8FAxnDVjIsh4pnHvnaB0PrnnfxHvisyFdN97u1wXvCwHE4Vfy+ZrKkLw=="],
 
